@@ -1,0 +1,132 @@
+const ldap = require("ldapjs");
+const AppError = require("../utils/appError");
+
+/**
+ * Check if a user exists in LDAP
+ * @param {string} identifier - username / email / mobile
+ * @param {object} settings - { ldap_url, base_dn, bind_dn, password, ou }
+ * @returns {Promise<object>} user data
+ */
+async function checkUserExists(
+  identifier,
+  { ldap_url, base_dn, bind_dn, password, ou }
+) {
+  console.log(`[LDAP] Creating client for URL: ${ldap_url}`);
+  const client = ldap.createClient({ url: ldap_url });
+
+  try {
+    // 🔹 Admin Bind
+    await new Promise((resolve, reject) => {
+      client.bind(bind_dn, password, (err) => {
+        if (err) {
+          return reject(
+            new AppError("LDAP admin bind failed: " + err, 500)
+          );
+        }
+        console.log("[LDAP] Successfully bound to server as", bind_dn);
+        resolve();
+      });
+    });
+
+    // 🔹 Dynamic search filter
+    const searchFilter = `(|(uid=${identifier})(mail=${identifier})(mobile=${identifier}))`;
+
+    const searchOptions = {
+      scope: "sub",
+      filter: searchFilter,
+      attributes: [
+        "uid",
+        "givenName",
+        "cn",
+        "sn",
+        "mobile",
+        "title",
+        "description",
+        "mail",
+      ],
+    };
+
+    const searchBase = ou ? `ou=${ou},${base_dn}` : base_dn;
+    console.log(`[LDAP] Searching under: ${searchBase}`);
+
+    // 🔹 Perform search
+    const userData = await new Promise((resolve, reject) => {
+      let data = {
+        userExists: false,
+        mobileNumber: "",
+        userName: "",
+        firstName: "",
+        lastName: "",
+        fullName: "",
+        title: "",
+        description: "",
+        email: "",
+        message: "",
+      };
+
+      client.search(searchBase, searchOptions, (err, res) => {
+        if (err) {
+          return reject(
+            new AppError("LDAP search error: " + err, 500)
+          );
+        }
+
+        res.on("searchEntry", (entry) => {
+          const getAttr = (type) => {
+            const attr = entry.attributes.find((a) => a.type === type);
+            return attr && attr.vals && attr.vals.length
+              ? String(attr.vals[0]).trim()
+              : "";
+          };
+
+          const givenName = getAttr("givenName");
+          const cn = getAttr("cn");
+          const sn = getAttr("sn");
+
+          // Prefer givenName, else derive from cn
+          const firstName =
+            givenName ||
+            (cn ? cn.split(" ").filter(Boolean)[0] : "");
+
+          const lastName = sn || (cn ? cn.split(" ").slice(1).join(" ") : "");
+
+          const fullName = [firstName, lastName].filter(Boolean).join(" ");
+
+          data = {
+            userExists: true,
+            mobileNumber: getAttr("mobile"),
+            userName: getAttr("uid"),
+            firstName,
+            lastName,
+            fullName,
+            title: getAttr("title"),
+            description: getAttr("description"),
+            email: getAttr("mail"),
+            message: `[LDAP] Found user in ${ou || "base DN"}`,
+          };
+        });
+
+        res.on("error", (err) =>
+          reject(
+            new AppError("LDAP search stream error: " + err, 500)
+          )
+        );
+
+        res.on("end", () => resolve(data));
+      });
+    });
+
+    return userData;
+  } catch (err) {
+    throw err;
+  } finally {
+    try {
+      client.unbind();
+      console.log("[LDAP] Connection unbound successfully");
+    } catch (e) {
+      // ignore unbind errors
+    }
+  }
+}
+
+module.exports = { checkUserExists };
