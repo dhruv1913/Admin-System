@@ -1,17 +1,39 @@
-const crypto = require('crypto');
 const fs = require('fs');      
 const path = require('path');   
+
+const crypto = require('crypto');
 const authController = require('../controllers/authController');
 
-
-// 🚨 OPTIMIZATION: Read the key ONCE when the server starts, not on every click!
 const decryptPayload = (req, res, next) => {
     if (!req.body) return next();
-    const { payload, key, iv } = req.body;
     
-    if (!payload || !key || !iv) return next(); 
+   let payload, key, iv;
+    
+    // Check if the frontend sent the stringified "data" object (FormData)
+    if (req.body.data) {
+        try {
+            const parsedData = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body.data;
+            payload = parsedData.payload;
+            key = parsedData.key;
+            iv = parsedData.iv;
+        } catch (e) {
+            return res.status(400).json({ message: "Invalid payload format." });
+        }
+    } else {
+        payload = req.body.payload;
+        key = req.body.key;
+        iv = req.body.iv;
+    }
 
-    // 🚨 Get the private key directly from the controller's memory (No API needed!)
+    if (!payload || !key || !iv) return next();
+    
+    // If it's still missing, we can't decrypt it
+    if (!payload || !key || !iv) {
+        console.log("⚠️ Middleware skipping decryption: Missing payload, key, or iv");
+        return next(); 
+    }
+
+    // 🚨 Get the private key directly from the controller's memory
     const privateKey = authController.getPrivateKey();
 
     if (!privateKey) {
@@ -60,7 +82,10 @@ const decryptPayload = (req, res, next) => {
         decryptedData = decryptedData.replace(/\0/g, '').trim();
         req.body = JSON.parse(decryptedData);
         
-        if (req.file) req.body.photo = req.file;
+        // 7. Re-attach the photo if multer found one!
+        if (req.file) {
+            req.body.photo = req.file;
+        }
 
         next();
 
@@ -69,4 +94,5 @@ const decryptPayload = (req, res, next) => {
         return res.status(400).json({ message: "Decryption failed. Invalid keys or payload." });
     }
 };
+
 module.exports = { decryptPayload };

@@ -2,20 +2,17 @@ import axios from "axios";
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL + "/api",
-  headers: { "Content-Type": "application/json" },
+  // 🚨 REMOVED hardcoded Content-Type so Axios can auto-detect FormData boundaries!
   withCredentials: true
 });
 
 // 🔐 Request Interceptor: Attach Token automatically
 apiClient.interceptors.request.use(
   (config) => {
-    // 🚨 FIXED: Now grabs the token from localStorage (where App.jsx saves it)
-    const savedAuth = localStorage.getItem("auth");
-    if (savedAuth) {
-      const authData = JSON.parse(savedAuth);
-      if (authData.token) {
-        config.headers.Authorization = `Bearer ${authData.token}`;
-      }
+    // 🚨 FIX: Match exactly what AuthContext saves!
+    const token = sessionStorage.getItem("token");
+    if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
@@ -30,12 +27,12 @@ apiClient.interceptors.response.use(
     console.error("🚨 ERROR STATUS:", error.response?.status);
 
     if (error.response?.status === 401) {
+      sessionStorage.clear();
       localStorage.clear();
       
-      // 🚨 Pull dynamic config from memory instead of .env
       const savedConfig = localStorage.getItem("appConfig");
-      let portalUrl = import.meta.env.VITE_SSO_URL; // Fallback
-      let serviceKey = "account"; // Fallback
+      let portalUrl = import.meta.env.VITE_SSO_URL; 
+      let serviceKey = "account"; 
       
       if (savedConfig) {
           const configData = JSON.parse(savedConfig);

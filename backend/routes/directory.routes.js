@@ -1,4 +1,4 @@
-const express = require('express');
+ const express = require('express');
 const router = express.Router();
 const dirController = require('../controllers/directoryController');
 const authMiddleware = require('../middleware/authMiddleware');
@@ -11,7 +11,7 @@ router.use(authMiddleware);
 
 router.get('/users/:ou', dirController.getUsers);
 
-// 🚨 REMOVED secureMiddleware so the data isn't decrypted twice!
+
 router.post('/add', photoUpload.single('photo'), decryptPayload, dirController.addUser);
 router.put('/edit', photoUpload.single('photo'), decryptPayload, dirController.editUser);
 

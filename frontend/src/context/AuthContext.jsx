@@ -1,8 +1,11 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
+import axios from 'axios';
 import { decryptToken } from "../utils/crypto";
 
 // 1. Create the Context
 const AuthContext = createContext(null);
+
+export const useAuth = () => useContext(AuthContext); 
 
 export const AuthProvider = ({ children }) => {
     const [auth, setAuth] = useState(null);
@@ -13,13 +16,14 @@ export const AuthProvider = ({ children }) => {
     const SERVICE_KEY = import.meta.env.VITE_SERVICE_KEY;
     const SSO_PORTAL_URL = `${import.meta.env.VITE_SSO_URL}/?sid=${SERVICE_KEY}`;
 
-    useEffect(() => {
+   useEffect(() => {
         const verifySession = async () => {
             try {
                 const params = new URLSearchParams(window.location.search);
                 const urlToken = params.get("token");
-                // 🔒 SECURITY UPGRADE: Switched to sessionStorage
-                const savedToken = sessionStorage.getItem("secure_token"); 
+                
+                // Grab token from sessionStorage
+                const savedToken = sessionStorage.getItem("token"); 
 
                 let activeToken = urlToken || savedToken;
 
@@ -48,14 +52,14 @@ export const AuthProvider = ({ children }) => {
                 };
 
                 setAuth(verifiedAuth);
-                sessionStorage.setItem("secure_token", activeToken); // 🔒 Save securely
+                sessionStorage.setItem("token", activeToken); 
 
                 // Clean token from URL for security
-                //if (urlToken) window.history.replaceState({}, document.title, window.location.pathname);
+                if (urlToken) window.history.replaceState({}, document.title, window.location.pathname);
 
             } catch (err) {
                 console.error("Auth Error:", err.message);
-                sessionStorage.removeItem("secure_token");
+                sessionStorage.removeItem("token");
                 setAuth(null);
             } finally {
                 setLoading(false);
@@ -65,18 +69,28 @@ export const AuthProvider = ({ children }) => {
         verifySession();
     }, []);
 
-    const logout = () => {
-        sessionStorage.clear();
-        setAuth(null);
-        window.location.replace(SSO_PORTAL_URL);
+    const handleLogout = async () => {
+        try {
+            // Tell the backend to destroy the secure cookies
+            await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/logout`, {}, {
+                withCredentials: true 
+            });
+        } catch (err) {
+            console.error("Backend logout failed, forcing local logout:", err);
+        } finally {
+            // Destroy the secure token in the frontend entirely
+            sessionStorage.clear();
+            localStorage.clear(); 
+            setAuth(null);
+            
+            // Force redirect to the SSO login page
+            window.location.href = SSO_PORTAL_URL || "/login";
+        }
     };
 
     return (
-        <AuthContext.Provider value={{ auth, loading, logout, SSO_PORTAL_URL }}>
+        <AuthContext.Provider value={{ auth, loading, handleLogout, SSO_PORTAL_URL }}>
             {children}
         </AuthContext.Provider>
     );
 };
-
-// Custom Hook for easy access anywhere in the app
-export const useAuth = () => useContext(AuthContext);

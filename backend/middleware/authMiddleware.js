@@ -1,6 +1,52 @@
 const { verifyToken } = require('../services/tokenService');
 const { errorResponse } = require('../utils/responseHandler');
 const { createClient, bind, search } = require('../services/ldapService');
+const { decryptToken } = require("../utils/encryption");
+const jwt = require("jsonwebtoken");
+
+exports.protect = async (req, res, next) => {
+  try {
+    // 1) Get the encrypted token from the header
+    let token;
+    if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
+      token = req.headers.authorization.split(" ")[1];
+    } else if (req.cookies && req.cookies.jwt) {
+      token = req.cookies.jwt;
+    }
+
+    if (!token) {
+      return res.status(401).json({ message: "You are not logged in." });
+    }
+
+    // 2) 🚨 THE FIX: Decrypt the AES string back into a Raw JWT!
+    let rawJwt = token;
+    try {
+        // This secret MUST match the service.secret_key in your SSO Database!
+        const secretKey = process.env.ENCRYPTION_SECRET || process.env.DEPT_SECRET_KEY;
+        const decrypted = decryptToken(token, secretKey);
+        
+        if (decrypted) {
+            rawJwt = decrypted;
+        }
+    } catch (err) {
+        console.log("Token decryption skipped/failed, trying raw token...");
+    }
+
+    // 3) Verify the Raw JWT
+    // (This is where it previously crashed because rawJwt was an encrypted string)
+    const decoded = jwt.verify(rawJwt, process.env.JWT_SECRET, { 
+        algorithms: ["HS512", "HS256"] 
+    });
+    
+    // 4) Attach user and grant access
+    req.user = decoded;
+    next();
+    
+  } catch (error) {
+    console.error("Token verification failed:", error.message);
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};
 
 module.exports = async (req, res, next) => {
     const authHeader = req.headers["authorization"];

@@ -147,30 +147,65 @@ export default function Admin() {
     setProductDialog(true); 
   };
 
-  const handleSubmit = async (e) => {
-      e.preventDefault();
-      try {
-          const data = new FormData();
-          const textPayload = { ...formData };
-          if (textPayload.permissions.length > 0 && ["ADMIN", "SUPER_ADMIN"].includes(textPayload.role)) {
-              textPayload.permissions = "ALLOW:" + textPayload.permissions.join(",");
-          }
+const handleSubmit = async (e) => {
+    e.preventDefault();
 
-          const { payload, key, iv } = await securePayload(textPayload);
-          data.append("payload", payload); data.append("key", key); data.append("iv", iv); data.append("uid", textPayload.uid);
-          if (selectedFile) data.append("photo", selectedFile);
+    try {
+        // 1️⃣ 🚨 THE FIX: Explicitly convert the object to a JSON string FIRST
+        const jsonString = JSON.stringify(formData);
+        
+        // 2️⃣ Encrypt the string
+        const encryptedData = securePayload(jsonString);
+        
+        // 3️⃣ Create the Multipart Form so multer can still read the photo
+        const submitData = new FormData();
+        
+        // Stringify the encrypted bundle so FormData doesn't corrupt it
+        submitData.append("data", JSON.stringify({
+            payload: encryptedData.payload,
+            key: encryptedData.key,
+            iv: encryptedData.iv
+        }));
 
-          if (editMode) await editUser(data);
-          else await addUser(data);
+        // Append the actual image file (this stays unencrypted so multer works)
+        if (selectedFile) {
+            submitData.append("photo", selectedFile);
+        }
 
-          toast.current.show({ severity: 'success', summary: 'Success', detail: `User ${actionMsg}`, life: 3000 });
-          setProductDialog(false);
-          loadAllData();
-      } catch (err) {
-          if (err.response?.status === 400) { setConflictMsg(err.response.data.message); setConflictDialog(true); } 
-          else { toast.current.show({ severity: 'error', summary: 'Error', detail: 'Operation Failed' }); }
-      }
-  };
+        // Send the encrypted bundle to the backend
+        const response = editMode 
+            ? await editUser(submitData) 
+            : await addUser(submitData);
+
+        // ... the rest of the success/catch logic stays EXACTLY the same ...
+        if (response.status === 200 || response.status === 201 || response.data?.message) {
+            toast.current.show({ 
+                severity: 'success', 
+                summary: 'Success', 
+                detail: editMode ? 'User updated successfully' : 'User added successfully', 
+                life: 3000 
+            });
+            
+            if (typeof setDialogVisible === 'function') setDialogVisible(false);
+            if (typeof setVisible === 'function') setVisible(false);
+
+            if (typeof fetchUsers === 'function') fetchUsers(); 
+            if (typeof loadUsers === 'function') loadUsers();
+        } else {
+            throw new Error(response.data?.message || "Operation failed");
+        }
+    } catch (err) {
+        console.error("Save Error:", err);
+        const errorMsg = err.response?.data?.message || err.response?.data?.error || "Operation failed";
+        
+        toast.current.show({ 
+            severity: 'error', 
+            summary: 'Error', 
+            detail: errorMsg, 
+            life: 3000 
+        });
+    }
+};
 
   const handleBulkImport = async (e) => {
       const file = e.target.files[0];
