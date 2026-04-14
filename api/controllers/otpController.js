@@ -7,7 +7,7 @@ const { checkUserExists } = require("../services/ldapService");
 const { decryptToken,encryptToken,rsaDecryptKey, aesDecrypt } = require("../utils/Crypto"); // AES-256-CBC
 const UAParser = require("ua-parser-js");
 
-const { JWT_SECRET, FRONTEND_URL, BACKEND_URL, JWT_EXPIRES_IN, COOKIE_DOMAIN, NODE_ENV } = process.env;
+const { JWT_SECRET, FRONTEND_URL, BACKEND_URL, JWT_EXPIRES_IN, COOKIE_DOMAIN, NODE_ENV, ENCRYPTION_SECRET } = process.env;
 
 // 🔹 helper: parse human-friendly expiry (e.g. "15m", "1h", "3600") to milliseconds
 function parseExpiryToMs(exp) {

@@ -1,12 +1,7 @@
-# ====================================
-# Node.js / Dependencies
-# ====================================
-node_modules/
-**/node_modules/             # This catches node_modules in all subfolders (frontend, backend, api)
 
-# ====================================
-# Environment variables & Secrets
-# ====================================
+node_modules/
+**/node_modules/            
+
 .env
 .env.local
 .env.development
@@ -14,14 +9,9 @@ node_modules/
 .env.production
 *.env
 
-# ====================================
-# Build / Dist folders (common in frontend & backend)
-# ====================================
-dist/
 build/
 .next/
-out/
-coverage/
+
 
 # ====================================
 # Logs
@@ -33,37 +23,7 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
-# ====================================
-# Runtime data
-# ====================================
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# ====================================
-# Optional npm cache
-# ====================================
 .npm
 
-# ====================================
-# IDE / Editor files
-# ====================================
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
 
-# ====================================
-# OS generated files
-# ====================================
-.DS_Store
-Thumbs.db
-
-# ====================================
-# Other common ignores
-# ====================================
-*.env.*
-.env.*.local
 
