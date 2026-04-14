@@ -44,35 +44,24 @@ exports.search = (client, base, options) => {
 };
 
 // 4. THE FIX: The missing function that connects your DB to LDAP
+// 4. THE FIX: The missing function that connects your DB to LDAP
 exports.checkUserExists = async (username, settings) => {
-  // Pass the exact database column 'ldap_url' to the client
   const client = exports.createClient(settings.ldap_url);
 
   try {
-    // Pass the exact database columns 'bind_dn' and 'password'
     await exports.bind(client, settings.bind_dn, settings.password);
 
-    // Search for the user using the database 'base_dn'
+    // 🚨 ADDED businessCategory and departmentNumber to attributes
     const searchOptions = {
       scope: "sub",
       filter: `(|(uid=${username})(mail=${username})(mobile=${username}))`,
       attributes: [
-        "uid",
-        "mobile",
-        "givenName",
-        "sn",
-        "cn",
-        "mail",
-        "title",
-        "jpegPhoto",
+        "uid", "mobile", "givenName", "sn", "cn", "mail", "title", "jpegPhoto",
+        "businessCategory", "departmentNumber" 
       ],
     };
 
-    const entries = await exports.search(
-      client,
-      settings.base_dn,
-      searchOptions,
-    );
+    const entries = await exports.search(client, settings.base_dn, searchOptions);
 
     if (entries.length === 0) {
       return { userExists: false };
@@ -81,7 +70,16 @@ exports.checkUserExists = async (username, settings) => {
     const user = entries[0];
     const getVal = (attr) => (Array.isArray(attr) ? attr[0] : attr || "");
 
-    // Return the exact structure your ldapController.js expects
+    // 🚨 Clean up the permissions array so the dashboard can read it
+    let allowedOUs = [];
+    if (user.departmentNumber) {
+        allowedOUs = Array.isArray(user.departmentNumber) ? user.departmentNumber : [user.departmentNumber];
+        // Strip the "ALLOW:" tag so the frontend gets clean department names
+        allowedOUs = allowedOUs.map(ou => ou.replace('ALLOW:', '').trim());
+    }
+
+    const userRole = getVal(user.businessCategory) || "USER";
+
     return {
       userExists: true,
       userName: getVal(user.uid),
@@ -91,18 +89,22 @@ exports.checkUserExists = async (username, settings) => {
       fullName: getVal(user.cn),
       email: getVal(user.mail),
       title: getVal(user.title),
-      picture: user.jpegPhoto
-        ? Buffer.from(getVal(user.jpegPhoto)).toString("base64")
-        : null,
+      picture: user.jpegPhoto ? Buffer.from(getVal(user.jpegPhoto)).toString("base64") : null,
+      
+      // 🚨 Give the token exactly what it's looking for
+      role: userRole, 
+      businessCategory: userRole, 
+      allowedOUs: allowedOUs,
+      departmentNumber: allowedOUs,
+      canWrite: userRole === "SUPER_ADMIN" || userRole === "ADMIN" 
     };
   } catch (err) {
     console.error("❌ LDAP checkUserExists Error:", err.message);
-    throw err; // Let the global error handler catch it
+    throw err; 
   } finally {
     client.unbind();
   }
 };
-
 // Add a new LDAP entry
 exports.add = (client, dn, entry) => {
   return new Promise((resolve, reject) => {

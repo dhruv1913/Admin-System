@@ -1,3 +1,4 @@
+require("dotenv").config(); // 🚨 ADD THIS LINE AT THE VERY TOP
 const ldap = require("ldapjs");
 
 const client = ldap.createClient({

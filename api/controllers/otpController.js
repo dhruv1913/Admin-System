@@ -8,6 +8,7 @@ const { decryptToken,encryptToken,rsaDecryptKey, aesDecrypt } = require("../util
 const UAParser = require("ua-parser-js");
 
 const { JWT_SECRET, FRONTEND_URL, BACKEND_URL, JWT_EXPIRES_IN, COOKIE_DOMAIN, NODE_ENV } = process.env;
+
 // 🔹 helper: parse human-friendly expiry (e.g. "15m", "1h", "3600") to milliseconds
 function parseExpiryToMs(exp) {
   if (!exp) return 15 * 60 * 1000; // default 15 minutes
@@ -19,130 +20,56 @@ function parseExpiryToMs(exp) {
   if (s.endsWith("m")) return num * 60 * 1000;
   if (s.endsWith("h")) return num * 60 * 60 * 1000;
   if (s.endsWith("d")) return num * 24 * 60 * 60 * 1000;
-  return 15 * 60 * 1000;
+  return 15 * 60 * 1000; // fallback
 }
-const getClientIp = (req) => {
-  return (
-    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
-    req.socket?.remoteAddress ||
-    req.ip
-  );
-};
-const hashOtp = (otp) => {
-  return crypto.createHash("sha256").update(otp).digest("hex");
-};
 
-
-const USER_LOCK_WINDOW_MIN = 15;
-const USER_LOCK_MAX_BLOCKS = 2;
-const OTP_MAX_ATTEMPTS = 3;
-
-/* ===============================
-   VERIFY OTP
-================================ */
-
+// ----------------------------------------------------------------------
+// 1) /auth/verifyOtp
+// ----------------------------------------------------------------------
 exports.verifyOtp = async (req, res) => {
   try {
-    /* ===============================
-       SESSION INIT
-    ============================== */
-    if (typeof req.session.otpFailedAttempts !== "number") {
-      req.session.otpFailedAttempts = 0;
-    }
-    if (typeof req.session.otpCaptchaRequired !== "boolean") {
-      req.session.otpCaptchaRequired = false;
+    let { mobile, otp, service_id, device_id } = req.body;
+
+    if (!mobile || !otp || !service_id) {
+      return res.status(400).json({ error: "Mobile number, OTP, and service_id are required" });
     }
 
-    /* ===============================
-       DECRYPT REQUEST
-    ============================== */
-    const { iv, key, payload } = req.body;
-    if (!iv || !key || !payload) {
-      return res.status(400).json({ success: false, message: "Invalid request" });
-    }
+    if (req.isEncrypted) {
+      console.log(`🔐 OTP Payload encrypted:`, req.body.data);
+      console.log(`API secret:`, process.env.ENCRYPTION_SECRET, process.env.ENCRYPTION_SECRET.length);
 
-    const aesKey = rsaDecryptKey(key);
-    const decryptedStr = aesDecrypt(payload, aesKey, iv);
-    if (!decryptedStr) {
-      return res.status(400).json({ success: false, message: "Invalid payload" });
-    }
-
-    const { mobile_number, service_id, otp_code, captcha } =
-      JSON.parse(decryptedStr);
-
-    if (!mobile_number || !service_id || !otp_code) {
-      return res.status(400).json({
-        success: false,
-        message: "Missing required fields",
-      });
-    }
-
-    /* ===============================
-       CAPTCHA CHECK
-    ============================== */
-
-    console.log("OTP Failed Attempts:", req.session);
-    console.log("OTP Captcha Required:", req.session.otpCaptchaRequired);
-    if (req.session.otpCaptchaRequired) {
-      if (!captcha) {
-        return res.status(400).json({
-          success: false,
-          code: "CAPTCHA_REQUIRED",
-          message: "Captcha is required 123",
-          showCaptcha: true,
-        });
+      const decryptedBodyStr = aesDecrypt(req.body.data, process.env.ENCRYPTION_SECRET);
+      if (!decryptedBodyStr) {
+        return res.status(400).json({ error: "Invalid encrypted payload" });
       }
-console.log("User Captcha:", captcha);
-console.log("Session Captcha:", req.session.captcha);
-      if (
-        !req.session.captcha ||
-        captcha.toLowerCase() !== req.session.captcha.toLowerCase()
-      ) {
-        req.session.captcha = null;
-        return res.status(400).json({
-          success: false,
-          code: "CAPTCHA_INVALID",
-          message: "Invalid captcha",
-          showCaptcha: true,
-        });
-      }
-
-      req.session.captcha = null;
+      const decryptedBody = JSON.parse(decryptedBodyStr);
+      mobile = decryptedBody.mobile;
+      otp = decryptedBody.otp;
+      service_id = decryptedBody.service_id;
+      device_id = decryptedBody.device_id;
     }
 
-    /* ===============================
-       USER LOCK CHECK (15 MIN)
-    ============================== */
-    const lockSince = new Date(
-      Date.now() - USER_LOCK_WINDOW_MIN * 60 * 1000
-    );
+    // 1️⃣ Block Check (15 mins)
+    const blockDurationMs = 15 * 60 * 1000;
+    const fifteenMinsAgo = new Date(Date.now() - blockDurationMs);
 
-    const blockedCount = await SmsOtpLog.count({
+    const isBlocked = await SmsOtpLog.count({
       where: {
-        mobile_number,
+        mobile_number: mobile,
         service_id,
         status: "blocked",
-        updated_at: { [Op.gt]: lockSince },
+        updated_at: { [Op.gt]: fifteenMinsAgo },
       },
     });
 
-    if (blockedCount >= USER_LOCK_MAX_BLOCKS) {
-      req.session.otpCaptchaRequired = true;
-      return res.status(423).json({
-        success: false,
-        code: "USER_LOCKED",
-        message:
-          "Too many failed OTP attempts. Account locked for 15 minutes.",
-        showCaptcha: true,
-      });
+    if (isBlocked > 0) {
+      return res.status(403).json({ error: "Too many failed attempts. Try again in 15 minutes." });
     }
 
-    /* ===============================
-       FETCH LATEST OTP (IMPORTANT FIX)
-    ============================== */
+    // 2️⃣ Find the latest valid OTP
     const otpEntry = await SmsOtpLog.findOne({
       where: {
-        mobile_number,
+        mobile_number: mobile,
         service_id,
         expires_at: { [Op.gt]: new Date() },
       },
@@ -150,212 +77,142 @@ console.log("Session Captcha:", req.session.captcha);
     });
 
     if (!otpEntry) {
-      req.session.otpCaptchaRequired = true;
-      return res.status(404).json({
-        success: false,
-        code: "OTP_EXPIRED",
-        message: "OTP expired or not found. Please request a new OTP.",
-        showCaptcha: true,
-      });
+      return res.status(400).json({ error: "OTP expired or not requested" });
     }
-
-    /* ===============================
-       BLOCKED OTP CHECK
-    ============================== */
+    if (otpEntry.is_used) {
+      return res.status(400).json({ error: "OTP already used" });
+    }
     if (otpEntry.status === "blocked") {
-      return res.status(403).json({
-        success: false,
-        code: "OTP_BLOCKED",
-        message:
-          "OTP blocked after multiple invalid attempts. Please request a new OTP.",
-        showCaptcha: true,
-      });
+      return res.status(403).json({ error: "OTP blocked due to too many attempts" });
     }
 
-    /* ===============================
-       OTP VALIDATION
-    ============================== */
-    const hashedInput = hashOtp(otp_code);
+    const failedAttempts = req.session.otpFailedAttempts || 0;
+    console.log("OTP Failed Attempts:", req.session);
 
-    if (otpEntry.otp_code !== hashedInput) {
-      otpEntry.attempt_count += 1;
-      req.session.otpFailedAttempts += 1;
-      req.session.otpCaptchaRequired = true;
+    // 3️⃣ Verify OTP
+    if (otpEntry.otp_code !== otp) {
+      req.session.otpFailedAttempts = failedAttempts + 1;
 
-      console.log("OTP otpCaptchaRequired:", req.session.otpCaptchaRequired);
-      console.log("OTP Captcha Required After Increment:", req.session.otpFailedAttempts);
-
-      if (otpEntry.attempt_count >= OTP_MAX_ATTEMPTS) {
-        otpEntry.status = "blocked"; // ✅ DO NOT set is_used here
+      if (req.session.otpFailedAttempts >= 3) {
+        await otpEntry.update({ status: "blocked", updated_at: new Date() });
+        req.session.otpFailedAttempts = 0;
+        req.session.otpCaptchaRequired = true; // Ask for Captcha next time
+        return res.status(403).json({ error: "Too many failed attempts. Try again in 15 minutes." });
       }
 
-      await otpEntry.save();
-
-      return res.status(400).json({
-        success: false,
-        code:
-          otpEntry.status === "blocked"
-            ? "OTP_BLOCKED"
-            : "OTP_INVALID",
-        message:
-          otpEntry.status === "blocked"
-            ? "OTP blocked after 3 invalid attempts. Please request a new OTP."
-            : "Invalid OTP",
-        attempt_count: otpEntry.attempt_count,
-        remaining_attempts: Math.max(
-          0,
-          OTP_MAX_ATTEMPTS - otpEntry.attempt_count
-        ),
-        showCaptcha: true,
-      });
+      const remaining = 3 - req.session.otpFailedAttempts;
+      return res.status(400).json({ error: `Invalid OTP. ${remaining} attempts left.` });
     }
 
-    /* ===============================
-       SUCCESS → RESET SECURITY
-    ============================== */
+    // ✅ OTP is Correct -> Reset Failed Attempts
     req.session.otpFailedAttempts = 0;
     req.session.otpCaptchaRequired = false;
-    req.session.captcha = null;
+    await otpEntry.update({ is_used: true, status: "verified", used_at: new Date() });
 
-    otpEntry.is_used = true;
-    otpEntry.status = "verified";
-    otpEntry.used_at = new Date();
-    await otpEntry.save();
-
-    /* ===============================
-       LDAP + SERVICE
-    ============================== */
-    const settings = await ServiceLdapSetting.findOne({
-      where: { service_id },
-    });
-
-    const service = await Service.findOne({
-      where: { id: service_id, is_active: true },
-    });
-
-    if (!service) {
-      return res.status(404).json({ success: false, message: "Service not found" });
+    // 4️⃣ LDAP Details Check
+    const ldapSettings = await ServiceLdapSetting.findOne({ where: { service_id } });
+    if (!ldapSettings) {
+      return res.status(404).json({ error: "LDAP settings not found for this service" });
     }
-   const redirectBase1 = service.service_url || FRONTEND_URL;
-    const ldapResult = await checkUserExists(otpEntry.mobile_number,settings);
 
-    console.log('rolelllllllllllll  ',ldapResult);
+    const service = await Service.findOne({ where: { id: service_id, is_active: true } });
+    if (!service) {
+      return res.status(404).json({ error: "Service not found or inactive" });
+    }
 
-    // 🔹 JWT payload
-        const tokenPayload = {
-          userId: otpEntry.user_id,
-          service_id,
-          name: ldapResult.fullName,
-          title: ldapResult.title,
-          email: ldapResult.email || null,
-          mobile: otpEntry.mobile_number,
-          description: ldapResult.description,
-          provider: "OTP",
-          authType: "Yukti",
-          iat: Math.floor(Date.now() / 1000),
-          jti: crypto.randomUUID(),
-          iss: BACKEND_URL,
-          aud: redirectBase1,
-          role:ldapResult.businessCategory, 
-        };
-        console.log("Token Payload:", tokenPayload);
-        const token = jwt.sign(tokenPayload, JWT_SECRET, {
-          algorithm: "HS512",
-          expiresIn: JWT_EXPIRES_IN,
-        });
-    
-        const secretKey = service.secret_key || process.env.ENCRYPTION_SECRET;
-        const encryptedToken = encryptToken(token, secretKey);
-        const encryptedTokenAuth = encryptToken(token, process.env.ENCRYPTION_SECRET);
+    const ldapResult = await checkUserExists(mobile, ldapSettings);
+    if (!ldapResult.userExists) {
+      return res.status(404).json({ error: "User not found in LDAP" });
+    }
+    console.log("rolelllllllllllll   " , ldapResult)
+    // 5️⃣ Generate Tokens
+    const tokenPayload = {
+      userId: ldapResult.userName || ldapResult.uid,
+      service_id: service.id,
+      name: ldapResult.fullName || ldapResult.cn,
+      title: ldapResult.title,
+      email: ldapResult.email || ldapResult.mail,
+      mobile: ldapResult.mobileNumber || ldapResult.mobile,
+      description: ldapResult.description,
+      provider: "OTP",
+      authType: "Yukti",
+      role: ldapResult.role || ldapResult.businessCategory || 'SUPER_ADMIN' // Fallback for admin system
+    };
 
+    const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    const decodedToken = jwt.decode(token); // To grab standard fields (iat, exp)
 
-                // 🔹 Get real client IP
-                const clientIp = getClientIp(req);
-        
-                // 🔹 Parse User Agent
-                const parser = new UAParser(req.headers["user-agent"]);
-                const result = parser.getResult();
-        
-                const browserName = result.browser.name || null;
-                const browserVersion = result.browser.version || null;
-                const os = result.os.name || null;
-                const deviceType = result.device.type || "desktop";
+    console.log("Token Payload:", decodedToken);
 
+    // 🚨 NEW: Parse User Agent for the Audit Log
+    const userAgentStr = req.headers["user-agent"] || "";
+    const parser = new UAParser(userAgentStr);
+    const browser = parser.getBrowser();
+    const os = parser.getOS();
+    const device = parser.getDevice();
 
-    
-        // ✅ Create login token entry
-        const loginToken = await LoginToken.create({
-          username: otpEntry.user_id,
-          service_id,
-          access_token: tokenPayload.jti,
-          ip_address: clientIp,
-          user_agent: req.headers["user-agent"],
+    const secretKey = service.secret_key || ENCRYPTION_SECRET;
+    const encryptedToken = encryptToken(token, secretKey);
+    const encryptedTokenAuth = encryptToken(token, process.env.ENCRYPTION_SECRET);
 
-          browser: browserName,
-          browser_version: browserVersion,
-          os: os,
-          device_type: deviceType,
-          provider: tokenPayload.provider,   // ✅ add this line
-        });
-    
-        // ✅ Create audit log entry
-        await LoginAuditLog.create({
-          username: otpEntry.user_id,
-          service_id,
-          token_id: loginToken.id,
-          action: "LOGIN",
-          ip_address: req.ip,
-          user_agent: req.headers["user-agent"],
-        });
-    
-        // 🔹 Cookies
-        const ONE_DAY = 24 * 60 * 60 * 1000;
-        const cookieOptions = {
-          path: "/",
-          httpOnly: true,
-          secure: false,
-          sameSite: "lax",
-          domain: COOKIE_DOMAIN,
-          maxAge: ONE_DAY,
-        };
-    
-        res.cookie("sso_token", token, cookieOptions);
-        res.cookie("auth_token", encryptedTokenAuth, cookieOptions);
-    
-        // 🔹 Session
-        // req.session.authenticated = true;
-        // req.session.user = JSON.stringify(tokenPayload);
-        // req.session.token = token;
-    
-    
-    
-    
-        // ✅ Final response
-        res.json({
-          success: true,
-          redirectUrl: `${redirectBase1}?token=${encodeURIComponent(encryptedToken)}`,
-        });
-  } catch (err) {
-    console.error("🔥 verifyOtp error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
+    // ✅ Create login token entry with all required tracking columns
+    const loginToken = await LoginToken.create({
+      username: otpEntry.user_id,
+      service_id,
+      access_token: decodedToken.jti, // Use the generated JTI
+      ip_address: getClientIp(req),
+      user_agent: userAgentStr,
+      provider: "OTP",
+      browser: browser.name || "Unknown",
+      browser_version: browser.version || "Unknown",
+      os: os.name || "Unknown",
+      device_type: device.type || "desktop",
     });
+
+    // ✅ Create audit log entry
+    await LoginAuditLog.create({
+      username: otpEntry.user_id,
+      service_id,
+      token_id: loginToken.id,
+      action: "LOGIN",
+      ip_address: getClientIp(req),
+      user_agent: userAgentStr,
+    });
+
+    // 🔹 Cookies
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    const cookieOptions = {
+      path: "/",
+      httpOnly: true,
+      secure: false,
+      sameSite: "lax",
+      domain: COOKIE_DOMAIN,
+      maxAge: ONE_DAY,
+    };
+
+    res.cookie("sso_token", token, cookieOptions);
+    res.cookie("auth_token", encryptedTokenAuth, cookieOptions);
+
+    // 🔹 Session (Optional, keeping your commented code)
+    // req.session.authenticated = true;
+    // req.session.user = { userId: ldapResult.userName, mobile };
+
+    return res.status(200).json({
+      message: "Login successful",
+      token: encryptedToken,
+      user: {
+        userId: ldapResult.userName,
+        mobile: ldapResult.mobileNumber,
+        name: ldapResult.fullName,
+      },
+      service_url: service.service_url, // Return to frontend
+    });
+
+  } catch (error) {
+    console.error("🔥 verifyOtp error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
   }
 };
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
