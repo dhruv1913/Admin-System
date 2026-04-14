@@ -9,6 +9,15 @@ const UAParser = require("ua-parser-js");
 
 const { JWT_SECRET, FRONTEND_URL, BACKEND_URL, JWT_EXPIRES_IN, COOKIE_DOMAIN, NODE_ENV, ENCRYPTION_SECRET } = process.env;
 
+// Add this near the top of the file!
+const getClientIp = (req) => {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    req.ip
+  );
+};
+
 // 🔹 helper: parse human-friendly expiry (e.g. "15m", "1h", "3600") to milliseconds
 function parseExpiryToMs(exp) {
   if (!exp) return 15 * 60 * 1000; // default 15 minutes
@@ -26,27 +35,65 @@ function parseExpiryToMs(exp) {
 // ----------------------------------------------------------------------
 // 1) /auth/verifyOtp
 // ----------------------------------------------------------------------
+// ----------------------------------------------------------------------
+// 1) /auth/verifyOtp
+// ----------------------------------------------------------------------
 exports.verifyOtp = async (req, res) => {
   try {
-    let { mobile, otp, service_id, device_id } = req.body;
+    let mobile, otp, service_id, device_id;
 
-    if (!mobile || !otp || !service_id) {
-      return res.status(400).json({ error: "Mobile number, OTP, and service_id are required" });
-    }
+    console.log("=== INCOMING OTP REQUEST ===");
+    console.log("req.body:", req.body);
 
-    if (req.isEncrypted) {
-      console.log(`🔐 OTP Payload encrypted:`, req.body.data);
-      console.log(`API secret:`, process.env.ENCRYPTION_SECRET, process.env.ENCRYPTION_SECRET.length);
+    const { iv, key, payload, data } = req.body;
 
-      const decryptedBodyStr = aesDecrypt(req.body.data, process.env.ENCRYPTION_SECRET);
-      if (!decryptedBodyStr) {
+    // 🚨 1. EXACT SAME DECRYPTION LOGIC AS authController.js 🚨
+    if (payload && key && iv) {
+      try {
+        // 1. RSA decrypt the session key
+        const aesKey = rsaDecryptKey(key);
+        
+        // 2. AES decrypt the payload using that session key and the IV
+        const decryptedStr = aesDecrypt(payload, aesKey, iv);
+        if (!decryptedStr) throw new Error("aesDecrypt returned null");
+
+        const decryptedBody = JSON.parse(decryptedStr);
+        mobile = decryptedBody.mobile_number || decryptedBody.mobile;
+        otp = decryptedBody.otp_code || decryptedBody.otp;
+        service_id = decryptedBody.service_id;
+        device_id = decryptedBody.device_id;
+        
+        console.log("✅ Successfully decrypted hybrid payload:", decryptedBody);
+      } catch (err) {
+        console.error("🔥 Hybrid Decryption failed:", err.message);
         return res.status(400).json({ error: "Invalid encrypted payload" });
       }
-      const decryptedBody = JSON.parse(decryptedBodyStr);
-      mobile = decryptedBody.mobile;
-      otp = decryptedBody.otp;
-      service_id = decryptedBody.service_id;
-      device_id = decryptedBody.device_id;
+    } 
+    // Fallback just in case frontend sends standard AES
+    else if (data) {
+      try {
+        const decryptedBodyStr = decryptToken(data, process.env.ENCRYPTION_SECRET);
+        const decryptedBody = JSON.parse(decryptedBodyStr);
+        mobile = decryptedBody.mobile;
+        otp = decryptedBody.otp;
+        service_id = decryptedBody.service_id;
+        device_id = decryptedBody.device_id;
+      } catch(err) {
+        console.error("🔥 Static Decryption failed:", err.message);
+        return res.status(400).json({ error: "Invalid encrypted payload" });
+      }
+    } 
+    // Fallback for Plain text
+    else {
+      mobile = req.body.mobile;
+      otp = req.body.otp;
+      service_id = req.body.service_id;
+      device_id = req.body.device_id;
+    }
+
+    // 🚨 2. VALIDATE THE DATA
+    if (!mobile || !otp || !service_id) {
+      return res.status(400).json({ error: "Mobile number, OTP, and service_id are required" });
     }
 
     // 1️⃣ Block Check (15 mins)
@@ -76,10 +123,15 @@ exports.verifyOtp = async (req, res) => {
       order: [["created_at", "DESC"]],
     });
 
+    // 🚨 ADDED LOGGING HERE
+    console.log("🔍 DB QUERY RESULT:", otpEntry ? `Found OTP in DB: ${otpEntry.otp_code}` : "NULL (Not Found or Expired)");
+
     if (!otpEntry) {
+      console.log("❌ FAILURE: No unexpired OTP found for this mobile number.");
       return res.status(400).json({ error: "OTP expired or not requested" });
     }
     if (otpEntry.is_used) {
+      console.log("❌ FAILURE: OTP is already marked as used.");
       return res.status(400).json({ error: "OTP already used" });
     }
     if (otpEntry.status === "blocked") {
@@ -87,22 +139,29 @@ exports.verifyOtp = async (req, res) => {
     }
 
     const failedAttempts = req.session.otpFailedAttempts || 0;
-    console.log("OTP Failed Attempts:", req.session);
 
     // 3️⃣ Verify OTP
-    if (otpEntry.otp_code !== otp) {
+    // 🚨 Hash the user's input so it matches the database hash!
+    const hashedInputOtp = crypto.createHash("sha256").update(String(otp)).digest("hex");
+    
+    console.log(`🔍 COMPARING -> Hashed Input: '${hashedInputOtp}' | DB Has: '${otpEntry.otp_code}'`);
+
+    if (String(otpEntry.otp_code) !== hashedInputOtp) {
+      console.log("❌ FAILURE: OTP Mismatch!");
       req.session.otpFailedAttempts = failedAttempts + 1;
 
       if (req.session.otpFailedAttempts >= 3) {
         await otpEntry.update({ status: "blocked", updated_at: new Date() });
         req.session.otpFailedAttempts = 0;
-        req.session.otpCaptchaRequired = true; // Ask for Captcha next time
+        req.session.otpCaptchaRequired = true;
         return res.status(403).json({ error: "Too many failed attempts. Try again in 15 minutes." });
       }
 
       const remaining = 3 - req.session.otpFailedAttempts;
       return res.status(400).json({ error: `Invalid OTP. ${remaining} attempts left.` });
     }
+
+    console.log("✅ SUCCESS: OTP matches perfectly!");
 
     // ✅ OTP is Correct -> Reset Failed Attempts
     req.session.otpFailedAttempts = 0;
@@ -124,7 +183,7 @@ exports.verifyOtp = async (req, res) => {
     if (!ldapResult.userExists) {
       return res.status(404).json({ error: "User not found in LDAP" });
     }
-    console.log("rolelllllllllllll   " , ldapResult)
+
     // 5️⃣ Generate Tokens
     const tokenPayload = {
       userId: ldapResult.userName || ldapResult.uid,
@@ -136,30 +195,28 @@ exports.verifyOtp = async (req, res) => {
       description: ldapResult.description,
       provider: "OTP",
       authType: "Yukti",
-      role: ldapResult.role || ldapResult.businessCategory || 'SUPER_ADMIN' // Fallback for admin system
+      role: ldapResult.role || ldapResult.businessCategory || 'SUPER_ADMIN' 
     };
 
     const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
-    const decodedToken = jwt.decode(token); // To grab standard fields (iat, exp)
+    const decodedToken = jwt.decode(token);
 
-    console.log("Token Payload:", decodedToken);
-
-    // 🚨 NEW: Parse User Agent for the Audit Log
+    // 🚨 Parse User Agent for the Audit Log
     const userAgentStr = req.headers["user-agent"] || "";
     const parser = new UAParser(userAgentStr);
     const browser = parser.getBrowser();
     const os = parser.getOS();
     const device = parser.getDevice();
 
-    const secretKey = service.secret_key || ENCRYPTION_SECRET;
+    const secretKey = service.secret_key || process.env.ENCRYPTION_SECRET;
     const encryptedToken = encryptToken(token, secretKey);
     const encryptedTokenAuth = encryptToken(token, process.env.ENCRYPTION_SECRET);
 
-    // ✅ Create login token entry with all required tracking columns
+    // ✅ Create login token entry
     const loginToken = await LoginToken.create({
       username: otpEntry.user_id,
       service_id,
-      access_token: decodedToken.jti, // Use the generated JTI
+      access_token: decodedToken.jti,
       ip_address: getClientIp(req),
       user_agent: userAgentStr,
       provider: "OTP",
@@ -193,10 +250,6 @@ exports.verifyOtp = async (req, res) => {
     res.cookie("sso_token", token, cookieOptions);
     res.cookie("auth_token", encryptedTokenAuth, cookieOptions);
 
-    // 🔹 Session (Optional, keeping your commented code)
-    // req.session.authenticated = true;
-    // req.session.user = { userId: ldapResult.userName, mobile };
-
     return res.status(200).json({
       message: "Login successful",
       token: encryptedToken,
@@ -205,7 +258,7 @@ exports.verifyOtp = async (req, res) => {
         mobile: ldapResult.mobileNumber,
         name: ldapResult.fullName,
       },
-      service_url: service.service_url, // Return to frontend
+      service_url: service.service_url,
     });
 
   } catch (error) {
@@ -213,8 +266,6 @@ exports.verifyOtp = async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 };
-
-
 
 exports.verifyOtp_old = async (req, res) => {
   try {
