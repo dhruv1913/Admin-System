@@ -71,19 +71,25 @@ export const AuthProvider = ({ children }) => {
 
     const handleLogout = async () => {
         try {
-            // Tell the backend to destroy the secure cookies
-            await axios.post(`${import.meta.env.VITE_API_URL}/api/auth/logout`, {}, {
-                withCredentials: true 
+            // 🚨 THE FIX: You must log out of the central SSO server to destroy the cookie!
+            // Note: credentials: "include" is REQUIRED to send and destroy the cross-origin cookie!
+            await fetch(`${SSO_API_URL}/auth/logout`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${sessionStorage.getItem("token")}`
+                },
+                credentials: "include" 
             });
         } catch (err) {
-            console.error("Backend logout failed, forcing local logout:", err);
+            console.error("SSO logout failed, forcing local logout:", err);
         } finally {
-            // Destroy the secure token in the frontend entirely
+            // 2. Destroy all local memory
             sessionStorage.clear();
             localStorage.clear(); 
             setAuth(null);
             
-            // Force redirect to the SSO login page
+            // 3. Redirect back to the SSO portal
             window.location.href = SSO_PORTAL_URL || "/login";
         }
     };
