@@ -1,4 +1,5 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
+import { decryptToken } from '../utils/crypto';
 
 const AuthContext = createContext(null);
 export const useAuth = () => useContext(AuthContext); 
@@ -6,14 +7,16 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider = ({ children }) => {
     const [auth, setAuth] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [fatalError, setFatalError] = useState(null); // 🚨 THE CIRCUIT BREAKER
+    const [fatalError, setFatalError] = useState(null); 
 
+    // Ensure NO hardcoded values exist here
     const SSO_API_URL = import.meta.env.VITE_SSO_API_URL;
     const SERVICE_KEY = import.meta.env.VITE_SERVICE_KEY;
     const SSO_PORTAL_URL = `${import.meta.env.VITE_SSO_URL}/?sid=${SERVICE_KEY}`;
+    const VITE_DEPT_SECRET_KEY = import.meta.env.VITE_DEPT_SECRET_KEY;
 
     useEffect(() => {
-        let isMounted = true;
+        let isMounted = true; 
 
         const verifySession = async () => {
             try {
@@ -28,41 +31,52 @@ export const AuthProvider = ({ children }) => {
                     return; 
                 }
 
-                const res = await fetch(`${SSO_API_URL}/auth/token/reads`, { 
+                const res = await fetch(`${SSO_API_URL}/auth/token/reads`, {
                     method: "POST",
+                    credentials: "include", 
                     headers: {
                         "Content-Type": "application/json",
-                        "Authorization": `Bearer ${activeToken}`,
-                        "X-Service-Key": SERVICE_KEY 
-                    }
+                        "X-Service-Key": SERVICE_KEY,
+                    },
                 });
 
                 if (!res.ok) throw new Error(`Backend rejected token with status ${res.status}`);
 
                 const rawResponse = await res.json();
-                
-                // Ensure data actually exists
-                if (!rawResponse.data) {
+                console.log("Profile data:", rawResponse);
+
+                let pureJwt = savedToken; // Fallback
+                let userData = rawResponse.data;
+
+                if (rawResponse.payload) {
+                    // Decrypt the payload using the ENV key
+                    const decryptedStr = decryptToken(rawResponse.payload, VITE_DEPT_SECRET_KEY);
+                    const parsed = JSON.parse(decryptedStr); 
+                    
+                    console.log("User data:", parsed.data);
+                    
+                    userData = parsed.data;
+                    pureJwt = parsed.jwt; 
+                }
+
+                if (!userData) {
                     throw new Error("Backend response did not contain user 'data'.");
                 }
 
-                let userData = rawResponse.data;
-
                 if (isMounted) {
                     setAuth({
-                        token: activeToken,
+                        token: pureJwt || activeToken,
                         role: (userData.role || "USER").toUpperCase(),
                         name: userData.name || "User",
                         uid: userData.uid || userData.userId
                     });
-                    sessionStorage.setItem("token", activeToken); 
+                    
+              
+                    sessionStorage.setItem("token", pureJwt || activeToken); 
                     setLoading(false);
                 }
 
-                // Safely clean the URL so the browser doesn't re-trigger
-                if (urlToken) {
-                    window.history.replaceState(null, "", window.location.pathname);
-                }
+    
 
             } catch (err) {
                 console.error("🚨 Auth Loop Killed by Error:", err);
@@ -70,15 +84,22 @@ export const AuthProvider = ({ children }) => {
                     sessionStorage.removeItem("token");
                     setAuth(null);
                     setLoading(false);
-                    setFatalError(err.message); // 🚨 Freeze the screen and show the error!
+                    
+                    
+                    if (!err.message.includes("401")) {
+                        setFatalError(err.message); 
+                    }
                 }
             }
         };
 
-        verifySession();
+        // Stop double execution loop
+        if (!auth) {
+            verifySession();
+        }
 
         return () => { isMounted = false; };
-    }, []);
+    }, [auth]);
 
     const handleLogout = async () => {
         try {
@@ -86,7 +107,6 @@ export const AuthProvider = ({ children }) => {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    "Authorization": `Bearer ${sessionStorage.getItem("token")}`,
                     "X-Service-Key": SERVICE_KEY 
                 },
                 body: JSON.stringify({
@@ -106,12 +126,13 @@ export const AuthProvider = ({ children }) => {
                 document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
             });
 
+            // Erase the token from the URL upon logout so it can't be copied
             window.history.replaceState({}, document.title, "/");
             window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
         }
     };
 
-    // 🚨 IF REACT PANICS, WE CATCH IT HERE INSTEAD OF LOOPING
+    // 🚨 THE CIRCUIT BREAKER
     if (fatalError) {
         return (
             <div style={{ backgroundColor: "#fee2e2", color: "#991b1b", padding: "3rem", height: "100vh", fontFamily: "sans-serif" }}>

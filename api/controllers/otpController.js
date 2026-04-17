@@ -162,7 +162,7 @@ const redirectBase = service.service_url || FRONTEND_URL || "http://localhost:51
       // 🚨 ADD THESE TWO MISSING LINES 🚨
       iss: BACKEND_URL,
       aud: redirectBase
-    };
+    };  
 
     const token = jwt.sign(tokenPayload, JWT_SECRET, { 
         expiresIn: JWT_EXPIRES_IN,

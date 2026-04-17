@@ -10,11 +10,8 @@ import Departments from "./pages/Departments";
 import Logs from "./pages/logs";
 import TopNav from "../components/TopNav";
 
-// 🚨 THE FIX: A Smart Login Redirector
-// If the user hits /login but is already authenticated, send them to the dashboard.
-// If they aren't authenticated, send them to the SSO Portal.
 const LoginRedirector = () => {
-    const { auth, loading, SSO_PORTAL_URL } = useAuth();
+    const { auth, loading, VITE_SSO_URL } = useAuth();
 
     if (loading) {
         return (
@@ -28,7 +25,7 @@ const LoginRedirector = () => {
         return <Navigate to="/dashboard" replace />;
     }
 
-    window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
+    window.location.replace(VITE_SSO_URL);
     return null;
 };
 
