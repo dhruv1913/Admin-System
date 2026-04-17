@@ -18,12 +18,12 @@ const {getPublicKey }=require("../routes/auth");
 
 // Middlewares
 const authMiddleware = require("../middlewares/authMiddleware");
-
+const authController = require('../controllers/authController');
 
 const router = express.Router();
 
 router.get("/public-key", getPublicKey);
-
+router.post('/auth/logout', authController.logout);
 // LDAP + OTP
 router.post("/checkUser", checkUser);
 router.post("/checkUserApp", checkUserApp);

@@ -2,14 +2,11 @@ import axios from "axios";
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL + "/api",
-  // 🚨 REMOVED hardcoded Content-Type so Axios can auto-detect FormData boundaries!
   withCredentials: true
 });
 
-// 🔐 Request Interceptor: Attach Token automatically
 apiClient.interceptors.request.use(
   (config) => {
-    // 🚨 FIX: Match exactly what AuthContext saves!
     const token = sessionStorage.getItem("token");
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
@@ -19,14 +16,21 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// 🚨 Response Interceptor: Global Logout on 401
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error("🚨 KICKED OUT BY:", error.response?.config?.url);
-    console.error("🚨 ERROR STATUS:", error.response?.status);
-
     if (error.response?.status === 401) {
+      console.error("🚨 401 UNAUTHORIZED:", error.response?.config?.url);
+      
+      // 🚨 ANTI-LOOP MECHANISM: Prevent infinite redirects!
+      const lastKick = sessionStorage.getItem("lastKick");
+      const now = Date.now();
+      if (lastKick && now - parseInt(lastKick) < 3000) {
+          console.error("🛑 Infinite loop detected! Halting redirect so you can debug.");
+          return Promise.reject(error);
+      }
+      sessionStorage.setItem("lastKick", now.toString());
+
       sessionStorage.clear();
       localStorage.clear();
       
@@ -35,9 +39,11 @@ apiClient.interceptors.response.use(
       let serviceKey = "account"; 
       
       if (savedConfig) {
-          const configData = JSON.parse(savedConfig);
-          portalUrl = configData.portalUrl || portalUrl;
-          serviceKey = configData.serviceKey || serviceKey;
+          try {
+              const configData = JSON.parse(savedConfig);
+              portalUrl = configData.portalUrl || portalUrl;
+              serviceKey = configData.serviceKey || serviceKey;
+          } catch(e) {}
       }
 
       window.location.href = `${portalUrl}/?sid=${serviceKey}`;

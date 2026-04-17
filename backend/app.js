@@ -38,4 +38,6 @@ app.use('/api', routes);
 // 5. Global Error Handler
 app.use(errorMiddleware);
 
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
 module.exports = app;

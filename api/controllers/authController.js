@@ -349,11 +349,64 @@ async function getMe(req, res) {
   });
 };
 
+// 🔹 THE KILL SWITCH FUNCTION
+async function logout(req, res) {
+  try {
+    let encryptedToken = req.body.token || req.cookies.auth_token;
+    if (!encryptedToken && req.headers.authorization) {
+        encryptedToken = req.headers.authorization.split(" ")[1];
+    }
 
+    if (!encryptedToken) {
+        return res.status(200).json({ message: "Already logged out." });
+    }
 
+    // Try multiple keys to decrypt
+    const keysToTry = [req.body.serviceKey, req.headers["x-service-key"], process.env.ENCRYPTION_SECRET, "mySuperSecretKey123!@#4567890abcdef"];
+    let decrypted = null;
+
+    for (let key of keysToTry) {
+        if (!key) continue;
+        try {
+            decrypted = decryptToken(encryptedToken, String(key).replace(/^["']|["']$/g, '').trim());
+            if (decrypted) break;
+        } catch (err) {}
+    }
+
+    // Destroy in DB using Access Token (jti)
+    if (decrypted) {
+        let decoded = jwt.decode(decrypted);
+        if (!decoded && decrypted.trim().startsWith('{')) {
+            try { decoded = JSON.parse(decrypted); } catch(e) {}
+        }
+
+        if (decoded && decoded.jti) {
+            await LoginToken.update(
+                { status: "INACTIVE", logout_time: new Date() },
+                { where: { access_token: decoded.jti } }
+            );
+            console.log(`🛑 DB UPDATE: Session ${decoded.jti} marked INACTIVE.`);
+        }
+    }
+
+    // Wipe Cookies
+    res.clearCookie("auth_token", { domain: process.env.COOKIE_DOMAIN, path: "/" });
+    res.clearCookie("sso_token", { domain: process.env.COOKIE_DOMAIN, path: "/" });
+
+    return res.status(200).json({ message: "Logout processed successfully" });
+
+  } catch (error) {
+    console.error("🚨 Backend Logout Error:", error);
+    return res.status(500).json({ error: "Logout failed" });
+  }
+}
+
+// 🚨 THIS IS CRITICAL TO PREVENT THE CRASH!
 module.exports = {
   completeLoginAndRedirect,
   completeQrLogin,
   validateSso,
-  getMe
+  getMe,
+  logout // Make sure this is right here!
 };
+

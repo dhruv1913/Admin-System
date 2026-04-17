@@ -151,59 +151,41 @@ const handleSubmit = async (e) => {
     e.preventDefault();
 
     try {
-        // 1️⃣ 🚨 THE FIX: Explicitly convert the object to a JSON string FIRST
-        const jsonString = JSON.stringify(formData);
+        // 🚨 THE FIX: Added 'await' and passed formData directly as an object!
+        const encryptedData = await securePayload(formData);
         
-        // 2️⃣ Encrypt the string
-        const encryptedData = securePayload(jsonString);
-        
-        // 3️⃣ Create the Multipart Form so multer can still read the photo
         const submitData = new FormData();
         
-        // Stringify the encrypted bundle so FormData doesn't corrupt it
         submitData.append("data", JSON.stringify({
             payload: encryptedData.payload,
             key: encryptedData.key,
             iv: encryptedData.iv
         }));
 
-        // Append the actual image file (this stays unencrypted so multer works)
         if (selectedFile) {
             submitData.append("photo", selectedFile);
         }
 
-        // Send the encrypted bundle to the backend
         const response = editMode 
             ? await editUser(submitData) 
             : await addUser(submitData);
 
-        // ... the rest of the success/catch logic stays EXACTLY the same ...
         if (response.status === 200 || response.status === 201 || response.data?.message) {
-            toast.current.show({ 
-                severity: 'success', 
-                summary: 'Success', 
-                detail: editMode ? 'User updated successfully' : 'User added successfully', 
-                life: 3000 
-            });
+            toast.current.show({ severity: 'success', summary: 'Success', detail: editMode ? 'User updated' : 'User added', life: 3000 });
             
+            // Close dialogs
+            if (typeof setProductDialog === 'function') setProductDialog(false);
             if (typeof setDialogVisible === 'function') setDialogVisible(false);
-            if (typeof setVisible === 'function') setVisible(false);
 
-            if (typeof fetchUsers === 'function') fetchUsers(); 
-            if (typeof loadUsers === 'function') loadUsers();
+            // Refresh table
+            loadAllData();
         } else {
             throw new Error(response.data?.message || "Operation failed");
         }
     } catch (err) {
         console.error("Save Error:", err);
         const errorMsg = err.response?.data?.message || err.response?.data?.error || "Operation failed";
-        
-        toast.current.show({ 
-            severity: 'error', 
-            summary: 'Error', 
-            detail: errorMsg, 
-            life: 3000 
-        });
+        toast.current.show({ severity: 'error', summary: 'Error', detail: errorMsg, life: 3000 });
     }
 };
 

@@ -4,12 +4,11 @@ const path = require("path");
 
 const ALGORITHM = "aes-256-cbc";
 
+// 🚨 THE FIX: Removed "/keys" from the path so it looks in the root backend folder!
 const privateKey = fs.readFileSync(
-  path.join(__dirname, "../keys/private.pem"),
+  path.join(__dirname, "../private.pem"),
   "utf8"
 );
-
-
 
 function getKeyFromSecret(secret) {
   return crypto.createHash("sha256").update(secret).digest(); // 32-byte key
@@ -34,7 +33,6 @@ function decryptToken(encrypted, secret) {
 }
 
 // 🔑 RSA decrypt AES key
-
 function rsaDecryptKey(encryptedKeyBase64) {
   return crypto.privateDecrypt(
     {
@@ -46,7 +44,6 @@ function rsaDecryptKey(encryptedKeyBase64) {
   );
 }
 
-
 // 🔓 AES decrypt payload
 function aesDecrypt(encrypted, key, ivBase64) {
   const iv = Buffer.from(ivBase64, "base64");
@@ -57,5 +54,4 @@ function aesDecrypt(encrypted, key, ivBase64) {
   return decrypted;
 }
 
-module.exports = { encryptToken, decryptToken,rsaDecryptKey,aesDecrypt };
-
+module.exports = { encryptToken, decryptToken, rsaDecryptKey, aesDecrypt };

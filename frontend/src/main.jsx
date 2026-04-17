@@ -8,9 +8,8 @@ import "primereact/resources/primereact.min.css";               // Core CSS
 import "primeicons/primeicons.css";
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <BrowserRouter> {/* <--- WRAP APP HERE */}
+  
+    <BrowserRouter> 
       <App />
     </BrowserRouter>
-  </React.StrictMode>
 )

@@ -200,40 +200,38 @@ exports.tokenReads = async (req, res) => {
       },
     });
 
+   // ... existing code in tokenReads ...
+
     if (!session) {
       return res.status(401).json({ error: "Session not active" });
     }
 
-    // ✅ success
-  
+    // ✅ success - Add a clear flag for the frontend to stop looping
+    const responseObj = {
+      valid: true,
+      sessionValid: true, // 🚨 NEW FLAG
+      jwt: decrypted,
+      data: decoded,
+    };
 
+    const jsonText = JSON.stringify(responseObj);
+    const encryptedResponse = encryptToken(jsonText, secretKey);
 
-const responseObj = {
-  valid: true,
-  jwt: decrypted,
-  data: decoded,
-};
-
-const jsonText = JSON.stringify(responseObj);
-
-// 🔐 encrypt
-const encryptedResponse = encryptToken(jsonText, secretKey);
-
-console.log("🔐 API encrypted:", encryptedResponse);
-
-console.log("API secret:", secretKey, secretKey?.length);
-
-
-return res.json({
-  payload: encryptedResponse,
+  return res.json({ 
+    valid: true,
+    sessionValid: true, // 🚨 Let the frontend know to stop looping
+    payload: encryptedResponse,
+    data: decoded 
 });
 
   } catch (err) {
     console.error("tokenReads error:", err);
     return res.status(401).json({ error: "Invalid session" });
   }
-};
 
+
+    
+};
 
 
 
