@@ -1,10 +1,16 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useAuth } from '../src/context/AuthContext';
 
-const ProtectedRoute = ({ children }) => {
+const ProtectedRoute = ({ children, allowedRoles }) => {
     const { auth, loading, SSO_PORTAL_URL } = useAuth();
 
-    // 1. FREEZE: Do nothing while AuthContext is verifying the token
+    useEffect(() => {
+        // Only kick if loading has completely finished and auth is definitively null
+        if (!loading && !auth) {
+            window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
+        }
+    }, [auth, loading, SSO_PORTAL_URL]);
+
     if (loading) {
         return (
             <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
@@ -13,13 +19,19 @@ const ProtectedRoute = ({ children }) => {
         );
     }
 
-    // 2. KICK: Only redirect if loading is completely finished AND auth is null
     if (!auth) {
-        window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
-        return null; // Return null while the browser redirects
+        return null; // Don't render anything while redirecting
     }
 
-    // 3. ALLOW: Render the dashboard
+    // Optional Role Check
+    if (allowedRoles && !allowedRoles.includes(auth.role)) {
+        return (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
+                <h2 style={{ color: "red" }}>Unauthorized Access</h2>
+            </div>
+        );
+    }
+
     return children;
 };
 

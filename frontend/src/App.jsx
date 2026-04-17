@@ -1,8 +1,7 @@
 import React from "react";
-import { Routes, Route, Navigate, useLocation } from "react-router-dom"; // 🚨 Add useLocation here
-import Login from './pages/login';
+import { Routes, Route, Navigate } from "react-router-dom"; 
 // Auth Provider & Guards
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "../components/ProtectedRoute";
 
 // Pages
@@ -11,18 +10,26 @@ import Departments from "./pages/Departments";
 import Logs from "./pages/logs";
 import TopNav from "../components/TopNav";
 
-const LoginWrapper = () => {
-    const { login } = useAuth();
-    const navigate = useNavigate();
+// 🚨 THE FIX: A Smart Login Redirector
+// If the user hits /login but is already authenticated, send them to the dashboard.
+// If they aren't authenticated, send them to the SSO Portal.
+const LoginRedirector = () => {
+    const { auth, loading, SSO_PORTAL_URL } = useAuth();
 
-    const handleSuccessfulLogin = (userData, token, role, allowedOUs, canWrite, name) => {
-        // Save the auth data to your context/storage
-        login(userData, token);
-        // Instantly push the user into the dashboard!
-        navigate("/dashboard", { replace: true });
-    };
+    if (loading) {
+        return (
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
+                <h2>Routing...</h2>
+            </div>
+        );
+    }
 
-    return <Login onLogin={handleSuccessfulLogin} />;
+    if (auth) {
+        return <Navigate to="/dashboard" replace />;
+    }
+
+    window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
+    return null;
 };
 
 export default function App() {
@@ -30,9 +37,9 @@ export default function App() {
     <AuthProvider>
         <div className="bg-gray-50 min-h-screen">
             <Routes>
-                {/* Send root and /login to our new Wrapper */}
-                <Route path="/" element={<LoginWrapper />} />
-                <Route path="/login" element={<LoginWrapper />} />
+                {/* 🚨 THE FIX: Point root and login to the smart redirector */}
+                <Route path="/" element={<LoginRedirector />} />
+                <Route path="/login" element={<LoginRedirector />} />
                 
                 <Route path="/dashboard" element={
                     <ProtectedRoute>

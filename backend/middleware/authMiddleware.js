@@ -1,6 +1,7 @@
 const { errorResponse } = require('../utils/responseHandler');
 const { createClient, bind, search } = require('../services/ldapService');
 const { decryptToken } = require('../utils/Crypto'); 
+const jwt = require('jsonwebtoken'); // 🚨 THIS IS CRITICAL
 
 const authMiddleware = async (req, res, next) => {
     let token;
@@ -16,10 +17,7 @@ const authMiddleware = async (req, res, next) => {
     try {
         const keysToTry = [
             process.env.DEPT_SECRET_KEY, 
-            process.env.ENCRYPTION_SECRET,
-            "mySuperSecretKey123!@#4567890abcdef",
-            "12345678901234567890123456789012"
-
+            process.env.ENCRYPTION_SECRET
         ];
 
         let decrypted = null;
@@ -41,14 +39,21 @@ const authMiddleware = async (req, res, next) => {
             return errorResponse(res, "Unauthorized: Cannot decrypt token", 401);
         }
 
-        // 2️⃣ 🚨 THE SILVER BULLET BYPASS 🚨
-        // We completely skip jwt.verify(). We just read the JSON from the SSO server!
+        // 2️⃣ 🚨 THE FIX: Decode the JWT
         let userPayload = null;
         try {
-            const parsed = JSON.parse(decrypted);
-            // The SSO server sends {"valid": true, "data": { userId: "...", role: "..." }}
-            userPayload = parsed.data || parsed.user || parsed;
+            // Decrypt returns a JWT string (e.g., "eyJhbGciOiJIUzUxMi..."). We must decode it.
+            let decoded = jwt.decode(decrypted);
+            
+            if (decoded) {
+                userPayload = decoded.data || decoded.user || decoded;
+            } else {
+                // Fallback just in case it ever IS pure JSON
+                const parsed = JSON.parse(decrypted);
+                userPayload = parsed.data || parsed.user || parsed;
+            }
         } catch (e) {
+            console.error("Payload extraction failed:", e.message);
             return errorResponse(res, "Unauthorized: Invalid payload format", 401);
         }
 

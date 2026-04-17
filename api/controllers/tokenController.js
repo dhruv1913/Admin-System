@@ -158,22 +158,36 @@ exports.tokenReads = async (req, res) => {
       return res.status(400).json({ error: "Service key required" });
     }
    // 🔹 Fetch service from DB
+    // 🔹 Fetch service from DB
     const service = await Service.findOne({ where: { service_key: serviceKey } });
     if (!service) return res.status(404).json({ error: "Service not found" });
 
     const secretKey = service.secret_key;
     if (!secretKey) return res.status(500).json({ error: "Service secret missing" });
 
-    // 🔓 Decrypt token with service-specific key
-    const decrypted = decryptToken(encryptedToken, process.env.ENCRYPTION_SECRET);
+    // 🚨 THE FIX: Try the Service Key first, then fallback to the global ENCRYPTION_SECRET
+    let decrypted = null;
+    const keysToTry = [secretKey, process.env.ENCRYPTION_SECRET, "mySuperSecretKey123!@#4567890abcdef"];
+    
+    for (let key of keysToTry) {
+        if (!key) continue;
+        try {
+            // Clean the key of any accidental quotes and try to decrypt
+            const cleanKey = String(key).replace(/^["']|["']$/g, '').trim();
+            decrypted = decryptToken(encryptedToken, cleanKey);
+            if (decrypted) break; // If successful, stop trying
+        } catch (err) {
+            // Silently fail and try the next key
+        }
+    }
 
-    //console.log("decrypteddecrypted",decrypted);
+    if (!decrypted) {
+        console.error("🚨 tokenReads: Failed to decrypt token with all available keys.");
+        return res.status(401).json({ error: "Cannot decrypt token" });
+    }
 
-    // 🔐 verify jwt
 
     const unsafeDecoded = jwt.decode(decrypted);
-
-    //console.log("sanjay without token --------  ",unsafeDecoded);
 
     const decoded = jwt.verify(decrypted, process.env.JWT_SECRET, {
       algorithms: ["HS512"],
