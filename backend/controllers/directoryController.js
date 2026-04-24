@@ -568,31 +568,42 @@ exports.deleteDepartment = async (req, res) => {
         return res.status(403).json({ message: "Unauthorized" });
     }
 
-    // 🚨 SMART CATCH: Looks in the body AND the URL parameters for the name
+    // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
+    
+    // Sometimes FormData stringifies boolean/null values, so we carefully extract the DN
+    let providedDn = req.body.dn || req.query.dn;
+    if (providedDn === "undefined" || providedDn === "null") providedDn = null;
 
-    if (!name) {
-        console.error("🚨 Delete Dept failed: Missing Name! Received:", req.body, req.query);
-        return res.status(400).json({ message: "Department name is required" });
+    if (!name && !providedDn) {
+        return res.status(400).json({ message: "Department name or DN is required" });
     }
 
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        const dn = `ou=${name},${getOrgBase()}`;
+        
+        // 🚨 THE FIX: Use the exact provided DN. If it's missing, rebuild it using the root base.
+        const targetDn = providedDn ? providedDn : `ou=${name},${getOrgBase()}`;
 
-        const users = await search(client, dn, { scope: "one", filter: "(objectClass=*)" });
-        if (users.length > 0) return res.status(400).json({ message: "Cannot delete: Department is not empty (contains users)" });
+        console.log(`🗑️ Attempting to delete exact DN: ${targetDn}`);
 
+        // Ensure OU is empty before deleting
+        const users = await search(client, targetDn, { scope: "one", filter: "(objectClass=*)" });
+        if (users.length > 0) {
+            return res.status(400).json({ message: "Cannot delete: Department contains users or nested OUs" });
+        }
+
+        // Delete the OU
         await new Promise((resolve, reject) => {
-            client.del(dn, (err) => err ? reject(err) : resolve());
+            client.del(targetDn, (err) => err ? reject(err) : resolve());
         });
 
-        await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${name}`);
+        await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${targetDn}`);
         return successResponse(res, null, "Department deleted");
 
     } catch (err) {
-        console.error("🚨 LDAP Delete OU Error:", err);
+        console.error("🚨 LDAP Delete OU Error:", err.message);
         return res.status(500).json({ message: "Delete failed: " + err.message });
     } finally {
         try { client.unbind(); } catch (e) { }

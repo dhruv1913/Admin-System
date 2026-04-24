@@ -55,15 +55,30 @@ export default function Departments() {
         fetchDepts();
     };
 
-    const handleDelete = async (name) => {
+    const handleDelete = async (dept) => {
         try {
-            const { payload, key, iv } = await securePayload({ name });
-            await deleteDepartment({ payload, key, iv });
-            showToast(`${name} is deleted successfully`, 'success');
+            // 🔍 Check your browser console! 
+            // Make sure the dept.name you clicked matches the one printed here!
+            console.log("Attempting to delete:", dept); 
+            
+            const encryptedData = await securePayload({ 
+                ouName: dept.name, 
+                name: dept.name,
+                dn: dept.dn 
+            });
+            
+            await deleteDepartment(encryptedData);
+            
+            showToast(`${dept.name} is deleted successfully`, 'success');
             fetchDepts();
         } catch (err) {
-            console.error(err);
-            showToast(`Failed to delete ${name}`, 'error');
+            console.error("Delete failed:", err);
+            
+            // 🚨 THE FIX: Extract the exact error message from the backend!
+            const errorMessage = err.response?.data?.message || `Failed to delete ${dept.name}`;
+            
+            // This will now pop up saying "Cannot delete: Department contains users or nested OUs"
+            showToast(errorMessage, 'error'); 
         }
     };
 
@@ -202,12 +217,14 @@ export default function Departments() {
                                         </td>
 
                                         <td className="px-4 py-2 text-center">
-                                            <button
-                                                disabled={d.total > 0}
-                                                onClick={() => handleDelete(d.name)}
-                                                aria-label={`Delete ${d.name}`}
-                                                className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
-                                            >
+                                           <button
+    // 🚨 THE FIX: If total is completely missing, treat it as 0. 
+    disabled={parseInt(d.total || 0, 10) > 0 || parseInt(d.active || 0, 10) > 0}
+    onClick={() => handleDelete(d)} 
+    aria-label={`Delete ${d.name}`}
+    className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
+>
+    
                                                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                                                     <polyline points="3 6 5 6 21 6" />
                                                     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />

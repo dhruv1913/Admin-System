@@ -11,6 +11,7 @@ const http = require("http");
 const WebSocket = require("ws");
 const path = require("path");
 const fs = require("fs");
+const { LoginToken } = require("./models");
 
 // Redis import
 const RedisStore = require("connect-redis").default;
@@ -259,6 +260,20 @@ app.get("/debug/session", (req, res) => {
    ROUTES
 --------------------------------------------*/
 app.use("/auth", authRoutes);
+
+app.get("/admin/sessions", async (req, res) => {
+    try {
+        const logs = await LoginToken.findAll({
+            order: [['login_time', 'DESC']],
+            limit: 100
+        });
+        res.json({ data: logs });
+    } catch (err) {
+        console.error("🚨 Dashboard Session Logs Error:", err);
+        res.status(500).json({ error: "Failed to fetch sessions" });
+    }
+});
+
 app.use("/service", serviceRoutes);
 app.use("/dashboard", dashboardRoutes);
 app.use("/mobile", mobileRoutes);

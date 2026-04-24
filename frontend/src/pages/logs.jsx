@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSessionLogs, getAuditLogs } from "../services/logService";
-import { Search, Monitor, Globe, Clock, ShieldCheck, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { Search, Monitor, Globe, Clock, ShieldCheck } from "lucide-react";
 
 export default function Logs() {
     const [sessionLogs, setSessionLogs] = useState([]);
@@ -15,15 +15,25 @@ export default function Logs() {
         fetchLogs();
     }, []);
 
-    const fetchLogs = async () => {
+   const fetchLogs = async () => {
         setLoading(true);
         try {
             const [res1, res2] = await Promise.all([
                 getSessionLogs(),
                 getAuditLogs()
             ]);
-            setSessionLogs(res1.data || []);
-            setAuditLogs(res2.data || []);
+
+            // 🚨 THE FIX: Aggressively hunt down the array inside the response object
+            const extractArray = (res) => {
+                if (!res) return [];
+                if (Array.isArray(res)) return res; 
+                if (Array.isArray(res.data)) return res.data; 
+                if (Array.isArray(res.data?.data)) return res.data.data; 
+                return [];
+            };
+
+            setSessionLogs(extractArray(res1));
+            setAuditLogs(extractArray(res2));
         } catch (err) {
             console.error("Failed to fetch logs", err);
         } finally {
@@ -46,18 +56,17 @@ export default function Logs() {
     const filteredLogs = currentLogs.filter(log => {
         const q = search.toLowerCase();
         if (!q) return true;
+        // 🚨 FIX: Allow searching by username OR ldap_uid
         return (
-            (log.ldap_uid && log.ldap_uid.toLowerCase().includes(q)) ||
-            (log.ip_address && log.ip_address.toLowerCase().includes(q)) ||
-            (log.audit_msg && log.audit_msg.toLowerCase().includes(q))
+            ((log.username || log.ldap_uid || "").toLowerCase().includes(q)) ||
+            ((log.ip_address || "").toLowerCase().includes(q)) ||
+            ((log.audit_msg || "").toLowerCase().includes(q))
         );
     });
 
     const totalRecords = filteredLogs.length;
     const totalPages = Math.ceil(totalRecords / rowsPerPage);
     const paginatedLogs = filteredLogs.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
-    const startIndex = totalRecords === 0 ? 0 : (currentPage - 1) * rowsPerPage;
-    const endIndex = totalRecords === 0 ? 0 : Math.min(startIndex + rowsPerPage, totalRecords);
 
     useEffect(() => {
         setCurrentPage(1);
@@ -112,12 +121,10 @@ export default function Logs() {
                             className="w-full pl-10 pr-4 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
                         />
                     </div>
-
-
                 </div>
 
                 {/* Table Area */}
-                <div className="overflow-x-auto min-h-[400px]">
+                <div className="overflow-x-auto min-h-100">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-gray-50/50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700">
@@ -125,8 +132,8 @@ export default function Logs() {
                                     <>
                                         <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">User / IP</th>
                                         <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">System</th>
-                                        <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Action</th>
-                                        <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Login & Active Time</th>
+                                        <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Status</th>
+                                        <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Login Time</th>
                                         <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Logout Time</th>
                                     </>
                                 ) : (
@@ -155,13 +162,14 @@ export default function Logs() {
                                         <p className="text-gray-500 dark:text-gray-400 font-medium">No logs found for this period.</p>
                                     </td>
                                 </tr>
-                            ) : paginatedLogs.map((log) => (
-                                <tr key={log.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-900/30 transition-colors">
+                            ) : paginatedLogs.map((log, index) => (
+                                <tr key={log.id || index} className="hover:bg-gray-50/50 dark:hover:bg-gray-900/30 transition-colors">
                                     {activeTab === "sessions" ? (
                                         <>
                                             <td className="px-4 py-4">
                                                 <div className="flex flex-col">
-                                                    <span className="font-bold text-gray-900 dark:text-white text-sm">{log.ldap_uid}</span>
+                                                    {/* 🚨 FIX: Extract username instead of ldap_uid */}
+                                                    <span className="font-bold text-gray-900 dark:text-white text-sm">{log.username || log.ldap_uid || "Unknown"}</span>
                                                     <span className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
                                                         <Globe size={10} /> {log.ip_address}
                                                     </span>
@@ -171,30 +179,28 @@ export default function Logs() {
                                                 <div className="flex items-center gap-3">
                                                     <Monitor size={18} className="text-gray-400" />
                                                     <div className="flex flex-col">
-                                                        <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{log.browser_name} {log.browser_version}</span>
-                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">{log.browser_plateform}</span>
+                                                        {/* 🚨 FIX: Correct browser and OS properties */}
+                                                        <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{log.browser || log.browser_name || "System"} {log.browser_version || ""}</span>
+                                                        <span className="text-[10px] text-gray-500 dark:text-gray-400">{log.os || log.browser_plateform || "Unknown"}</span>
                                                     </div>
                                                 </div>
                                             </td>
                                             <td className="px-4 py-4 text-center">
-                                                <span className={`px-3 py-1 rounded-full text-sm font-semibold ${log.login_type === 'LOGIN'
+                                                <span className={`px-3 py-1 rounded-full text-xs font-bold tracking-wider uppercase ${log.status === 'ACTIVE'
                                                     ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
-                                                    : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'
+                                                    : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
                                                     }`}>
-                                                    {log.login_type}
+                                                    {log.status || log.login_type || "N/A"}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-4">
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{formatTime(log.login_time)}</span>
-                                                    <span className="text-[10px] text-gray-500 dark:text-gray-400 italic">Active: {formatTime(log.active_time)}</span>
-                                                </div>
+                                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{formatTime(log.login_time)}</span>
                                             </td>
                                             <td className="px-4 py-4">
                                                 {log.logout_time ? (
                                                     <span className="text-xs text-gray-600 dark:text-gray-400">{formatTime(log.logout_time)}</span>
                                                 ) : (
-                                                    <span className="px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-700">Active Session</span>
+                                                    <span className="text-xs font-bold text-green-600">Active Now</span>
                                                 )}
                                             </td>
                                         </>
@@ -205,7 +211,7 @@ export default function Logs() {
                                             </td>
                                             <td className="px-4 py-2">
                                                 <div className="flex flex-col">
-                                                    <span className="font-bold text-gray-900 dark:text-white text-sm">{log.ldap_uid}</span>
+                                                    <span className="font-bold text-gray-900 dark:text-white text-sm">{log.username || log.ldap_uid}</span>
                                                     <span className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
                                                         <Globe size={10} /> {log.ip_address}
                                                     </span>
@@ -214,11 +220,11 @@ export default function Logs() {
                                             <td className="px-4 py-2">
                                                 <div className="flex items-center gap-3">
                                                     <ShieldCheck size={18} className="text-indigo-500 shrink-0" />
-                                                    <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">{log.audit_msg}</p>
+                                                    <p className="text-sm text-gray-700 dark:text-gray-300 line-clamp-2">{log.action || log.audit_msg}</p>
                                                 </div>
                                             </td>
                                             <td className="px-4 py-2">
-                                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{formatTime(log.inserted_on)}</span>
+                                                <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{formatTime(log.timestamp || log.inserted_on)}</span>
                                             </td>
                                         </>
                                     )}
@@ -246,41 +252,11 @@ export default function Logs() {
                         </div>
 
                         <div className="flex items-center gap-1">
-                            <button
-                                onClick={() => setCurrentPage(1)}
-                                disabled={currentPage === 1}
-                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
-                            >
-                                «
-                            </button>
-
-                            <button
-                                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                                disabled={currentPage === 1}
-                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
-                            >
-                                ‹
-                            </button>
-
-                            <span className="text-sm font-medium px-2">
-                                {currentPage} / {totalPages}
-                            </span>
-
-                            <button
-                                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                                disabled={currentPage === totalPages || totalRecords === 0}
-                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
-                            >
-                                ›
-                            </button>
-
-                            <button
-                                onClick={() => setCurrentPage(totalPages)}
-                                disabled={currentPage === totalPages || totalRecords === 0}
-                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
-                            >
-                                »
-                            </button>
+                            <button onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40">«</button>
+                            <button onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} disabled={currentPage === 1} className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40">‹</button>
+                            <span className="text-sm font-medium px-2">{currentPage} / {totalPages || 1}</span>
+                            <button onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalRecords === 0} className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40">›</button>
+                            <button onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalRecords === 0} className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40">»</button>
                         </div>
                     </div>
                 </div>

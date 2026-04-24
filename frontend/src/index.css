@@ -1,5 +1,5 @@
 @import "tailwindcss";
-
+@custom-variant dark (&:where(.dark, .dark *));
 @theme {
   --color-yukti-gradient: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
 }
