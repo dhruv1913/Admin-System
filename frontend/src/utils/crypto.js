@@ -1,32 +1,47 @@
 import CryptoJS from "crypto-js";
 
-// This creates the exact same 16-byte zeroed IV as Node.js Buffer.alloc(16, 0)
 const IV = CryptoJS.enc.Hex.parse("00000000000000000000000000000000");
 
 function getKeyFromSecret(secret) {
-    if (!secret) throw new Error("Secret key is missing!");
-    // Matches backend: crypto.createHash("sha256").update(secret).digest()
-    return CryptoJS.SHA256(String(secret));
+  return CryptoJS.SHA256(secret); // WordArray (32 bytes)
 }
 
-export const encryptToken = (text, secret) => {
-    const key = getKeyFromSecret(secret);
-    const encrypted = CryptoJS.AES.encrypt(String(text), key, {
-        iv: IV,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
-    });
-    // Returns the standard Base64 string exactly like the backend
-    return encrypted.toString(); 
-};
+export function encryptToken(text, secret) {
+  try {
+    const KEY = getKeyFromSecret(secret);
 
-export const decryptToken = (encryptedBase64, secret) => {
-    if (!encryptedBase64) return null;
-    const key = getKeyFromSecret(secret);
-    const decrypted = CryptoJS.AES.decrypt(String(encryptedBase64), key, {
-        iv: IV,
-        mode: CryptoJS.mode.CBC,
-        padding: CryptoJS.pad.Pkcs7
+    const encrypted = CryptoJS.AES.encrypt(text, KEY, {
+      iv: IV,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
     });
-    return decrypted.toString(CryptoJS.enc.Utf8);
-};
+
+    return encrypted.toString();
+  } catch (err) {
+    console.error("Encrypt failed:", err);
+    return null;
+  }
+}
+
+export function decryptToken(encryptedBase64, secret) {
+  try {
+    const KEY = getKeyFromSecret(secret);
+
+    // 🔹 Parse base64 ciphertext exactly like Node output
+    const cipherParams = CryptoJS.lib.CipherParams.create({
+      ciphertext: CryptoJS.enc.Base64.parse(encryptedBase64),
+    });
+
+    const decrypted = CryptoJS.AES.decrypt(cipherParams, KEY, {
+      iv: IV,
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    });
+
+    const result = decrypted.toString(CryptoJS.enc.Utf8);
+    return result || null;
+  } catch (err) {
+    console.error("Decrypt failed:", err);
+    return null;
+  }
+}

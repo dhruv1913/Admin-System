@@ -22,7 +22,7 @@ const decryptDbPassword = (encryptedPassword) => {
 // ✅ FIXED: Check if a user ID already exists in the database
 exports.checkUserExists = async (uid) => {
     const result = await sequelize.query(
-        "SELECT id FROM ldap_user_mapping WHERE ldap_uid = :uid", 
+        "SELECT id FROM ldap_user_mapping WHERE ldap_uid = :uid",
         {
             replacements: { uid: uid },
             type: sequelize.QueryTypes.SELECT
@@ -37,11 +37,11 @@ exports.insertUserMapping = async (uid, password, ipAddress, userDN) => {
     await sequelize.query(
         "INSERT INTO ldap_user_mapping (ldap_uid, ldap_pwd, ip_address, is_active, ldap_user_dn) VALUES (:uid, :pwd, :ip, TRUE, :dn)",
         {
-            replacements: { 
-                uid: uid, 
-                pwd: safePassword, 
-                ip: ipAddress, 
-                dn: userDN 
+            replacements: {
+                uid: uid,
+                pwd: safePassword,
+                ip: ipAddress,
+                dn: userDN
             },
             type: sequelize.QueryTypes.INSERT
         }
@@ -74,7 +74,7 @@ exports.updateUserStatus = async (uid, isActive) => {
 // ✅ FIXED: Permanently delete a user from the database
 exports.deleteUserMapping = async (uid) => {
     await sequelize.query(
-        "DELETE FROM ldap_user_mapping WHERE ldap_uid = :uid", 
+        "DELETE FROM ldap_user_mapping WHERE ldap_uid = :uid",
         {
             replacements: { uid: uid },
             type: sequelize.QueryTypes.DELETE
@@ -127,20 +127,18 @@ exports.insertAuditLog = async (uid, ip, msg, time) => {
 
 // Fetch recent Session Logs
 exports.getRecentSessionLogs = async () => {
-    const result = await pool.query(`
-        SELECT * FROM ldap_user_active_log
-        ORDER BY id DESC
-        LIMIT 1000
-    `);
-    return result.rows;
+    const result = await sequelize.query(
+        `SELECT * FROM ldap_user_active_log ORDER BY id DESC LIMIT 1000`,
+        { type: sequelize.QueryTypes.SELECT }
+    );
+    return result;
 };
 
 // Fetch recent Audit Logs
 exports.getRecentAuditLogs = async () => {
-    const result = await pool.query(`
-        SELECT * FROM ldap_audit_log
-        ORDER BY id DESC
-        LIMIT 1000
-    `);
-    return result.rows;
+    const result = await sequelize.query(
+        `SELECT * FROM ldap_audit_log ORDER BY id DESC LIMIT 1000`,
+        { type: sequelize.QueryTypes.SELECT }
+    );
+    return result;
 };

@@ -1,147 +1,326 @@
-import { useEffect, useState, useRef } from "react";
-import { getDepartments, createDepartment, deleteDepartment } from "../services/departmentService";
-import { DataTable } from 'primereact/datatable';
-import { Column } from 'primereact/column';
-import { Button } from 'primereact/button';
-import { Dialog } from 'primereact/dialog';
-import { InputText } from 'primereact/inputtext';
-import { Toast } from 'primereact/toast';
-import { ConfirmDialog, confirmDialog } from 'primereact/confirmdialog';
-import { Tag } from 'primereact/tag';
-import { securePayload } from "../utils/encryption"; 
+import { useEffect, useState } from "react";
+import Toast from "../../components/ui/Toast";
+import { Plus } from "lucide-react";
+import {
+    getDepartments,
+    createDepartment,
+    deleteDepartment,
+} from "../services/departmentService";
+import { securePayload } from "../utils/encryption";
 import { useNavigate } from "react-router-dom";
 
-
 export default function Departments() {
-   const [depts, setDepts] = useState([]);
+    const [depts, setDepts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [dialogVisible, setDialogVisible] = useState(false);
     const [newDeptName, setNewDeptName] = useState("");
-    
-    
-    const [globalFilter, setGlobalFilter] = useState("");
-    const toast = useRef(null);
+    const [search, setSearch] = useState("");
+    const [currentPage, setCurrentPage] = useState(1);
+    const [rowsPerPage, setRowsPerPage] = useState(10);
 
     const navigate = useNavigate();
-    
 
-    useEffect(() => { fetchDepts(); }, []);
+    const [notification, setNotification] = useState(null);
+
+    const showToast = (message, type = 'success') => {
+        setNotification({ message, type });
+    };
+
+    useEffect(() => {
+        fetchDepts();
+    }, []);
 
     const fetchDepts = async () => {
         setLoading(true);
         try {
-            const res = await getDepartments(); 
+            const res = await getDepartments();
             setDepts(res.data);
         } catch (err) {
-            console.error("Failed to load depts", err);
+            console.error(err);
         } finally {
             setLoading(false);
         }
     };
 
- const handleCreate = async () => {
+    const handleCreate = async () => {
         if (!newDeptName.trim()) return;
-        try {
-            // 🚨 ADDED 'await' HERE
-            const { payload, key, iv } = await securePayload({ ouName: newDeptName });
-            
-            await createDepartment({ payload, key, iv }); 
-            toast.current.show({ severity: 'success', summary: 'Success', detail: 'Department Created' });
-            setDialogVisible(false);
-            setNewDeptName("");
-            fetchDepts();
-        } catch (err) {
-            toast.current.show({ severity: 'error', summary: 'Error', detail: err.response?.data?.message || "Failed" });
-        }
-    };
-    
-    const confirmDelete = (rowData) => {
-        if (rowData.total > 0) {
-            toast.current.show({ severity: 'warn', summary: 'Cannot Delete', detail: 'Department contains users!' });
-            return;
-        }
-        confirmDialog({
-            message: `Are you sure you want to delete '${rowData.name}'?`,
-            header: 'Confirm Deletion',
-            icon: 'pi pi-exclamation-triangle',
-            acceptClassName: 'p-button-danger',
-            accept: () => handleDelete(rowData.name)
+
+        const { payload, key, iv } = await securePayload({
+            ouName: newDeptName,
         });
+
+        await createDepartment({ payload, key, iv });
+        setDialogVisible(false);
+        setNewDeptName("");
+        fetchDepts();
     };
 
-   const handleDelete = async (ouName) => {
+    const handleDelete = async (name) => {
         try {
-            // 🚨 ADDED 'await' HERE
-            const { payload, key, iv } = await securePayload({ name: ouName });
-            
-            await deleteDepartment({ payload, key, iv }); 
-            toast.current.show({ severity: 'success', summary: 'Deleted', detail: 'Department removed' });
+            const { payload, key, iv } = await securePayload({ name });
+            await deleteDepartment({ payload, key, iv });
+            showToast(`${name} is deleted successfully`, 'success');
             fetchDepts();
         } catch (err) {
-            toast.current.show({ severity: 'error', summary: 'Error', detail: err.response?.data?.message || 'Delete failed' });
+            console.error(err);
+            showToast(`Failed to delete ${name}`, 'error');
         }
     };
 
-    const totalTemplate = (r) => <span className="font-bold text-gray-700 ml-2">{r.total}</span>;
-    const activeTemplate = (r) => <Tag value={r.active} severity={r.active > 0 ? "success" : "secondary"} rounded />;
-    const inactiveTemplate = (r) => <Tag value={r.inactive} severity={r.inactive > 0 ? "danger" : "secondary"} rounded />;
-
-    const actionTemplate = (rowData) => (
-        <div className="flex gap-2">
-            <Button icon="pi pi-trash" rounded text severity="danger" onClick={() => confirmDelete(rowData)} disabled={rowData.total > 0} tooltip="Delete Department" />
-        </div>
+    const filtered = depts.filter((d) =>
+        d.name.toLowerCase().includes(search.toLowerCase())
     );
 
-    const header = (
-        <div className="flex flex-wrap align-items-center justify-between gap-2">
-            <h2 className="m-0 text-xl font-bold text-gray-700">Departments List</h2>
-            <div className="flex gap-2">
-                <span className="p-input-icon-left">
-                    <i className="pi pi-search" />
-                    <InputText type="search" onInput={(e) => setGlobalFilter(e.target.value)} placeholder="Search..." />
-                </span>
-            </div>
-        </div>
-    );
+    // Pagination calculations
+    const totalEntries = filtered.length;
+    const totalPages = Math.max(1, Math.ceil(totalEntries / rowsPerPage));
+    const startIndex = (currentPage - 1) * rowsPerPage;
+    const endIndex = Math.min(startIndex + rowsPerPage, totalEntries);
+    const displayed = filtered.slice(startIndex, endIndex);
+    const displayStart = totalEntries === 0 ? 0 : startIndex + 1;
+    const displayEnd = totalEntries === 0 ? 0 : endIndex;
+
+    // Reset to first page when search or rowsPerPage changes
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [search, rowsPerPage]);
+
+    // Clamp current page when data or rowsPerPage changes
+    useEffect(() => {
+        if (currentPage > totalPages) setCurrentPage(totalPages);
+    }, [totalPages]);
 
     return (
-        <div>
-            <Toast ref={toast} />
-            <ConfirmDialog />
-            
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-                <div className="flex justify-between items-center mb-4">
-                    {/* 🚨 3. Wrap the title and back button together */}
+        <div className="py-4 w-full">
+            {notification && (
+                <Toast
+                    message={notification.message}
+                    type={notification.type}
+                    onClose={() => setNotification(null)}
+                />
+            )}
+
+            <div className="bg-white shadow-xl rounded-2xl overflow-hidden border border-gray-100 w-full">
+
+                {/* HEADER */}
+                <div className="px-4 py-5 border-b border-gray-100 flex justify-between items-center">
                     <div className="flex items-center gap-3">
-                        <Button icon="pi pi-arrow-left" rounded text severity="secondary" aria-label="Back" onClick={() => navigate('/dashboard')} />
-                        <h2 className="text-xl font-bold text-gray-800 m-0">Back to Dashboard</h2>
-                     
+                        <button
+                            onClick={() => navigate("/dashboard")}
+                            className="p-2 rounded-full hover:bg-gray-100"
+                        >
+                            ←
+                        </button>
+                        <h2 className="text-lg font-bold text-gray-900">
+                            Back to Dashboard
+                        </h2>
                     </div>
-                    
-                    <Button label="New Department" icon="pi pi-plus" onClick={() => setDialogVisible(true)} />
+
+                    <button
+                        onClick={() => setDialogVisible(true)}
+                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-200 dark:shadow-none hover:scale-105 active:scale-95"
+                    >
+                        <Plus size={18} /> New Department
+                    </button>
                 </div>
 
-                <DataTable value={depts} loading={loading} stripedRows paginator rows={10} globalFilter={globalFilter} header={header} tableStyle={{ minWidth: '50rem' }}>
-                    <Column field="name" header="Department Name" sortable style={{ fontWeight: 'bold', width: '30%' }}></Column>
-                    <Column field="total" header="Total Users" body={totalTemplate} sortable style={{ width: '15%' }}></Column>
-                    <Column field="active" header="Active" body={activeTemplate} sortable style={{ width: '15%' }}></Column>
-                    <Column field="inactive" header="Inactive" body={inactiveTemplate} sortable style={{ width: '15%' }}></Column>
-                    <Column body={actionTemplate} style={{ width: '10%' }}></Column>
-                </DataTable>
+                {/* TOP BAR */}
+                <div className="px-4 py-4 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="text-base font-bold text-gray-900">
+                        Departments List
+                    </h3>
+
+                    <div className="relative w-56">
+                        <input
+                            type="text"
+                            placeholder="Search..."
+                            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            onChange={(e) => setSearch(e.target.value)}
+                        />
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                            🔍
+                        </span>
+                    </div>
+                </div>
+
+                {/* TABLE */}
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                        <thead>
+                            <tr className="bg-gray-50 border-b border-gray-100">
+                                    <th className="px-4 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-left">
+                                        Department Name
+                                    </th>
+                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                        Total Users
+                                    </th>
+                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                        Active
+                                    </th>
+                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                        Inactive
+                                    </th>
+                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                        Action</th>
+                                </tr>
+                        </thead>
+
+                        <tbody className="divide-y divide-gray-100">
+                                {loading ? (
+                                <tr>
+                                    <td colSpan="5" className="text-center py-8">
+                                        <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto"></div>
+                                    </td>
+                                </tr>
+                            ) : totalEntries === 0 ? (
+                                <tr>
+                                    <td colSpan="5" className="text-center py-6 text-gray-500">
+                                        No departments found.
+                                    </td>
+                                </tr>
+                            ) : (
+                                displayed.map((d, i) => (
+                                    <tr key={i} className="hover:bg-gray-50">
+                                        <td className="px-4 py-2 text-sm font-medium text-gray-700">
+                                            {d.name}
+                                        </td>
+
+                                        <td className="px-4 py-2 text-sm text-center font-semibold">
+                                            {d.total}
+                                        </td>
+
+                                        <td className="px-4 py-2 text-center">
+                                            <span className="px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-700">
+                                                {d.active}
+                                            </span>
+                                        </td>
+
+                                        <td className="px-4 py-2 text-center">
+                                            <span className="px-3 py-1 rounded-full text-sm font-semibold bg-blue-100 text-blue-700">
+                                                {d.inactive}
+                                            </span>
+                                        </td>
+
+                                        <td className="px-4 py-2 text-center">
+                                            <button
+                                                disabled={d.total > 0}
+                                                onClick={() => handleDelete(d.name)}
+                                                aria-label={`Delete ${d.name}`}
+                                                className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
+                                            >
+                                                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                                    <polyline points="3 6 5 6 21 6" />
+                                                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                                                    <path d="M10 11v6" />
+                                                    <path d="M14 11v6" />
+                                                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
+                                                </svg>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {/* 🔥 PAGINATION BAR (UI ONLY) */}
+                <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50">
+
+                    {/* LEFT TEXT */}
+                    <div className="text-sm text-gray-500">
+                        Showing <span className="font-medium text-gray-900">{displayStart}</span> to <span className="font-medium text-gray-900">{displayEnd}</span> of <span className="font-medium text-gray-900">{totalEntries}</span> entries
+                    </div>
+
+                    {/* RIGHT CONTROLS */}
+                    <div className="flex items-center gap-4">
+
+                        {/* ROWS */}
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-500">Rows:</span>
+                            <select value={rowsPerPage} onChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); }} className="border border-gray-200 text-sm rounded-md px-2 py-1 focus:outline-none">
+                                <option value={5}>5</option>
+                                <option value={10}>10</option>
+                                <option value={25}>25</option>
+                                <option value={50}>50</option>
+                            </select>
+                        </div>
+
+                        {/* PAGINATION BUTTONS */}
+                        <div className="flex items-center gap-1">
+                            <button
+                                onClick={() => setCurrentPage(1)}
+                                disabled={currentPage === 1}
+                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
+                            >
+                                «
+                            </button>
+
+                            <button
+                                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
+                            >
+                                ‹
+                            </button>
+
+                            <span className="text-sm font-medium px-2">
+                                {currentPage} / {totalPages}
+                            </span>
+
+                            <button
+                                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages || totalEntries === 0}
+                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
+                            >
+                                ›
+                            </button>
+
+                            <button
+                                onClick={() => setCurrentPage(totalPages)}
+                                disabled={currentPage === totalPages || totalEntries === 0}
+                                className="px-2 py-1 text-gray-500 hover:bg-gray-200 rounded disabled:opacity-40"
+                            >
+                                »
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <Dialog header="Create Department" visible={dialogVisible} style={{ width: '350px' }} onHide={() => setDialogVisible(false)}>
-                <div className="flex flex-col gap-4 pt-2">
-                    <div className="flex flex-col gap-2">
-                        <label htmlFor="dept" className="font-bold text-sm text-gray-700">Department Name</label>
-                        <InputText id="dept" value={newDeptName} onChange={(e) => setNewDeptName(e.target.value)} autoFocus />
-                    </div>
-                    <div className="flex justify-end gap-2">
-                         <Button label="Cancel" icon="pi pi-times" text onClick={() => setDialogVisible(false)} />
-                         <Button label="Create" icon="pi pi-check" onClick={handleCreate} />
+            {/* MODAL */}
+            {dialogVisible && (
+                <div className="fixed inset-0 bg-black/30 flex items-center justify-center">
+                    <div className="bg-white rounded-lg w-80 p-6 shadow-lg">
+                        <h3 className="text-lg font-semibold mb-4">
+                            Create Department
+                        </h3>
+
+                        <input
+                            value={newDeptName}
+                            onChange={(e) => setNewDeptName(e.target.value)}
+                            placeholder="Department Name"
+                            className="w-full border px-3 py-2 rounded-md mb-4"
+                        />
+
+                        <div className="flex justify-end gap-2">
+                            <button
+                                onClick={() => setDialogVisible(false)}
+                                className="px-3 py-1 text-gray-600"
+                            >
+                                Cancel
+                            </button>
+
+                            <button
+                                onClick={handleCreate}
+                                className="bg-blue-600 text-white px-3 py-1 rounded-md"
+                            >
+                                Create
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </Dialog>
+            )}
         </div>
     );
 }

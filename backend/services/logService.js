@@ -51,12 +51,12 @@ const logAction = async (req, action, uid, role, status, message) => {
     try {
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
         const safeMessage = `[${action}] [Role: ${role || 'USER'}] ${message || "System Action"}`;
-        
+
         // ✅ CLEANED UP: Delegate the query to dbService
         await dbService.insertAuditLog(
-            uid || "UNKNOWN", 
-            ip, 
-            safeMessage, 
+            uid || "UNKNOWN",
+            ip,
+            safeMessage,
             new Date()
         );
     } catch (err) {

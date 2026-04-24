@@ -7,8 +7,7 @@ const dbService = require('../services/dbService');
 const xlsx = require("xlsx");
 const crypto = require('crypto');
 const ldap = require('ldapjs');
-const fs = require('fs');
-const path = require('path');
+
 // ==========================================
 // HELPER FUNCTIONS
 // ==========================================
@@ -67,7 +66,7 @@ exports.getUsers = async (req, res) => {
         const users = await search(client, getOrgBase(), {
             scope: "sub",
             filter: filter,
-            attributes: ["uid", "cn", "sn", "mail", "description", "mobile", "businessCategory", "employeeType", "departmentNumber", "createTimestamp"]
+            attributes: ["uid", "cn", "sn", "mail", "description", "mobile", "businessCategory", "employeeType", "departmentNumber", "createTimestamp", "labeledURI"]
         });
 
         let processedUsers = users.map(u => {
@@ -157,7 +156,7 @@ exports.exportUsers = async (req, res) => {
     }
 };
 
-exports.addUser = async (req, res) => { 
+exports.addUser = async (req, res) => {
     const { uid, firstName, lastName, email, secondaryEmail, password, mobile, title, permissions, department, role } = req.body;
 
     if (!uid || !department || !password) return res.status(400).json({ message: "Missing fields" });
@@ -188,10 +187,10 @@ exports.addUser = async (req, res) => {
         const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
 
         // 🚨 IMPORTANT: Make sure your PG database actually has the 'ldap_user_dn' column!
-        await dbService.insertUserMapping(uid, password, userIP, newUserDN); 
+        await dbService.insertUserMapping(uid, password, userIP, newUserDN);
 
         const ldapPassword = generateSSHA(password);
-        
+
         let formattedPermissions = undefined;
         if (Array.isArray(permissions)) {
             formattedPermissions = permissions.map(s => "ALLOW:" + String(s).trim());
@@ -204,18 +203,10 @@ exports.addUser = async (req, res) => {
             cn: `${firstName} ${lastName}`, sn: lastName, uid: uid,
             userPassword: ldapPassword, employeeType: "active",
             businessCategory: role || "USER", mail: email, description: secondaryEmail,
-            mobile: mobile, title: title || "Employee", 
-            departmentNumber: formattedPermissions, 
+            mobile: mobile, title: title || "Employee",
+            departmentNumber: formattedPermissions,
             labeledURI: `uploads/${uid}.jpg`
         });
-
-        if (req.file) {
-            const oldPath = req.file.path;
-            const newPath = path.join(req.file.destination, `${uid}.jpg`);
-            if (fs.existsSync(oldPath)) {
-                fs.renameSync(oldPath, newPath);
-            }
-        }
 
         await new Promise((resolve, reject) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
@@ -227,12 +218,12 @@ exports.addUser = async (req, res) => {
     } catch (err) {
         // 🚨 FIXED: The backend console will now tell you exactly what failed
         console.error("🔥 Add User Error:", err);
-        
+
         // 🚨 FIXED: Added the missing 'return' keyword
         return res.status(500).json({ message: "Server Error" });
     } finally {
         // 🚨 FIXED: Moved unbind here so it ALWAYS executes, stopping connection leaks
-        try { client.unbind(); } catch(e) {}
+        try { client.unbind(); } catch (e) { }
     }
 };
 
@@ -264,29 +255,21 @@ exports.editUser = async (req, res) => {
         if (dupFilter && currentOU) {
             const searchBase = `ou=${currentOU},${getOrgBase()}`; // Only look in this OU
             const duplicates = await search(client, searchBase, { scope: "sub", filter: dupFilter, attributes: ['uid'] });
-            
+
             const conflict = duplicates.find(u => {
                 const uID = Array.isArray(u.uid) ? u.uid[0] : u.uid;
                 return uID !== uid;
             });
-            
+
             if (conflict) {
-                return res.status(400).json({ 
-                    message: `Conflict: Email or Mobile already used by ${conflict.uid} in the ${currentOU} department.` 
+                return res.status(400).json({
+                    message: `Conflict: Email or Mobile already used by ${conflict.uid} in the ${currentOU} department.`
                 });
             }
         }
 
-        if (req.file) {
-            const oldPath = req.file.path;
-            const newPath = path.join(req.file.destination, `${uid}.jpg`);
-            if (fs.existsSync(oldPath)) {
-                fs.renameSync(oldPath, newPath);
-            }
-        }
-        
         // 🚨 1. FIXED PASSWORD UPDATE FORMAT
-       if (password && typeof password === 'string' && password.trim() !== "") {
+        if (password && typeof password === 'string' && password.trim() !== "") {
             await dbService.updateUserPassword(uid, password);
 
 
@@ -302,15 +285,15 @@ exports.editUser = async (req, res) => {
 
         // Update Postgres DB Status
         if (employeeType) {
-    // Safely extract string whether it's an Array or a String
-    const typeStr = Array.isArray(employeeType) ? employeeType[0] : employeeType;
-    const isActive = (String(typeStr).toLowerCase() === "active");
-    await dbService.updateUserStatus(uid, isActive);
-}
+            // Safely extract string whether it's an Array or a String
+            const typeStr = Array.isArray(employeeType) ? employeeType[0] : employeeType;
+            const isActive = (String(typeStr).toLowerCase() === "active");
+            await dbService.updateUserStatus(uid, isActive);
+        }
 
         const changes = cleanEntry({
-     cn: (firstName && lastName) ? `${firstName} ${lastName}` : undefined,
-    sn: lastName, mail: email, description: secondaryEmail,
+            cn: (firstName && lastName) ? `${firstName} ${lastName}` : undefined,
+            sn: lastName, mail: email, description: secondaryEmail,
             title: title, mobile: mobile, employeeType: employeeType,
             businessCategory: role, departmentNumber: permissions,
             labeledURI: req.file ? `uploads/${uid}.jpg` : undefined
@@ -345,8 +328,8 @@ exports.editUser = async (req, res) => {
             }
         }
 
-     const displayName = (firstName && lastName) 
-            ? `${firstName} ${lastName} (${uid})` 
+        const displayName = (firstName && lastName)
+            ? `${firstName} ${lastName} (${uid})`
             : `user ${uid}`;
 
         // 2. Determine the exact action taken
@@ -354,7 +337,7 @@ exports.editUser = async (req, res) => {
         if (employeeType) {
             actionMsg = `Changed account status to ${employeeType.toUpperCase()} for ${displayName}`;
         } else if (password) {
-             actionMsg = `Reset password for ${displayName}`;
+            actionMsg = `Reset password for ${displayName}`;
         } else {
             actionMsg = `Updated profile details (name, email, etc.) for ${displayName}`;
         }
@@ -364,12 +347,12 @@ exports.editUser = async (req, res) => {
         await logAction(req, "UPDATE_USER", req.user?.uid || "Admin", finalStatus, actionMsg);
 
         return successResponse(res, { uid }, actionMsg);
-        
+
     } catch (err) {
         console.error("Edit Error:", err);
         return res.status(500).json({ message: "Update failed" });
     }
-    try { client.unbind(); } catch(e) {}
+    try { client.unbind(); } catch (e) { }
 };
 
 exports.deleteUser = async (req, res) => {
@@ -398,10 +381,10 @@ exports.deleteUser = async (req, res) => {
     } catch (err) {
         console.error("Delete failed:", err);
         return res.status(500).json({ message: "Delete failed" });
-   } finally {
-        try { 
-            client.unbind(); 
-        } catch(e) {
+    } finally {
+        try {
+            client.unbind();
+        } catch (e) {
             console.error("Unbind error:", e);
         }
     }
@@ -455,7 +438,7 @@ exports.bulkImport = async (req, res) => {
                 const newUserDN = `uid=${user.uid},ou=${user.department},${getOrgBase()}`;
                 const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
 
-               await dbService.insertUserMapping(user.uid, user.password, userIP, newUserDN);
+                await dbService.insertUserMapping(user.uid, user.password, userIP, newUserDN);
 
                 const ldapPassword = generateSSHA(user.password);
                 const entry = cleanEntry({
@@ -549,7 +532,7 @@ exports.createDepartment = async (req, res) => {
 
     // 🚨 SMART CATCH: Grab the name no matter what the frontend called it
     const ouName = req.body.ouName || req.body.name || req.body.department;
-    
+
     if (!ouName) {
         console.error("🚨 Create Dept failed: Missing Name! Received Body:", req.body);
         return res.status(400).json({ message: "Department Name is required" });
@@ -567,7 +550,7 @@ exports.createDepartment = async (req, res) => {
             client.add(newDN, entry, (err) => err ? reject(err) : resolve());
         });
 
-       await logAction(req, "CREATE_OU", req.user?.uid || "Admin", "ACTIVE", `Created Department: ${cleanName}`);
+        await logAction(req, "CREATE_OU", req.user?.uid || "Admin", "ACTIVE", `Created Department: ${cleanName}`);
         return successResponse(res, null, "Department created successfully");
 
     } catch (err) {
@@ -587,12 +570,12 @@ exports.deleteDepartment = async (req, res) => {
 
     // 🚨 SMART CATCH: Looks in the body AND the URL parameters for the name
     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
-    
+
     if (!name) {
         console.error("🚨 Delete Dept failed: Missing Name! Received:", req.body, req.query);
         return res.status(400).json({ message: "Department name is required" });
     }
-    
+
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
@@ -605,14 +588,14 @@ exports.deleteDepartment = async (req, res) => {
             client.del(dn, (err) => err ? reject(err) : resolve());
         });
 
-       await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${name}`);
+        await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${name}`);
         return successResponse(res, null, "Department deleted");
 
     } catch (err) {
         console.error("🚨 LDAP Delete OU Error:", err);
         return res.status(500).json({ message: "Delete failed: " + err.message });
     } finally {
-        try { client.unbind(); } catch (e) {}
+        try { client.unbind(); } catch (e) { }
     }
 };
 

@@ -1,12 +1,11 @@
 // 🚨 Import your newly unified encryption utility
-const { decrypt } = require('../utils/encryption'); 
+const { decrypt } = require('../utils/encryption');
 
 const decryptPayload = (req, res, next) => {
     if (!req.body) return next();
-    
+
     let encryptedPayload;
-    
-    // Check if the frontend sent the stringified "data" object (e.g., via FormData with an image)
+
     if (req.body.data) {
         try {
             const parsedData = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body.data;
@@ -20,7 +19,7 @@ const decryptPayload = (req, res, next) => {
 
     // If no encrypted payload exists, just move to the next middleware
     if (!encryptedPayload) {
-        return next(); 
+        return next();
     }
 
     try {
@@ -30,10 +29,10 @@ const decryptPayload = (req, res, next) => {
 
         // 2. Use the unified AES-256-CBC decrypt function
         const decryptedData = decrypt(encryptedPayload, secret);
-        
+
         // 3. Parse the decrypted JSON back into req.body
         req.body = JSON.parse(decryptedData);
-        
+
         // 4. Re-attach the photo if multer found one!
         if (req.file) {
             req.body.photo = req.file;

@@ -135,29 +135,25 @@ exports.tokenRead = (req, res) => {
   }
 };
 
-
-
 exports.tokenReads = async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
 
-    const encryptedToken =
+    const tokenString =
       authHeader && authHeader.startsWith("Bearer ")
         ? authHeader.split(" ")[1]
         : req.cookies.auth_token;
 
-    if (!encryptedToken) {
+    if (!tokenString) {
       return res.status(401).json({ error: "No token provided" });
     }
-    console.log('encryptedToken sanjay  =>', encryptedToken);
-    // 🔓 decrypt
-
-     // 🔹 Get service_key from header
+    
+    // 🔹 Get service_key from header
     const serviceKey = req.headers["x-service-key"] || req.cookies?.service_key;
     if (!serviceKey) {
       return res.status(400).json({ error: "Service key required" });
     }
-   // 🔹 Fetch service from DB
+
     // 🔹 Fetch service from DB
     const service = await Service.findOne({ where: { service_key: serviceKey } });
     if (!service) return res.status(404).json({ error: "Service not found" });
@@ -165,41 +161,55 @@ exports.tokenReads = async (req, res) => {
     const secretKey = service.secret_key;
     if (!secretKey) return res.status(500).json({ error: "Service secret missing" });
 
-    // 🚨 THE FIX: Try the Service Key first, then fallback to the global ENCRYPTION_SECRET
-    let decrypted = null;
-    const keysToTry = [secretKey, process.env.ENCRYPTION_SECRET, "mySuperSecretKey123!@#4567890abcdef"];
-    
-    for (let key of keysToTry) {
-        if (!key) continue;
-        try {
-            // Clean the key of any accidental quotes and try to decrypt
-            const cleanKey = String(key).replace(/^["']|["']$/g, '').trim();
-            decrypted = decryptToken(encryptedToken, cleanKey);
-            if (decrypted) break; // If successful, stop trying
-        } catch (err) {
-            // Silently fail and try the next key
+    // 🚨 SMART CHECK: Is the token already a Pure JWT or is it encrypted?
+    let rawJwtString = null;
+    const safeToken = String(tokenString).replace(/ /g, '+');
+
+    // Test 1: Is it a valid JWT string already?
+    const initialDecode = jwt.decode(safeToken);
+    if (initialDecode && (initialDecode.userId || initialDecode.uid || initialDecode.jti)) {
+         rawJwtString = safeToken; // It's already pure!
+    } else {
+        // Test 2: It must be encrypted. Try to decrypt it.
+        const keysToTry = [secretKey, process.env.ENCRYPTION_SECRET, "mySuperSecretKey123!@#4567890abcdef"];
+        
+        for (let key of keysToTry) {
+            if (!key) continue;
+            try {
+                const cleanKey = String(key).replace(/^["']|["']$/g, '').trim();
+                const decryptedAttempt = decryptToken(safeToken, cleanKey);
+                if (decryptedAttempt) {
+                    rawJwtString = decryptedAttempt;
+                    break;
+                }
+            } catch (err) {
+                // Silently fail and try the next key
+            }
         }
     }
 
-    if (!decrypted) {
-        console.error("🚨 tokenReads: Failed to decrypt token with all available keys.");
-        return res.status(401).json({ error: "Cannot decrypt token" });
+    if (!rawJwtString) {
+        console.error("🚨 tokenReads: Failed to decrypt token or parse as JWT.");
+        return res.status(401).json({ error: "Cannot parse or decrypt token" });
     }
 
+    // Now we are guaranteed to have a valid raw JWT string
+    const unsafeDecoded = jwt.decode(rawJwtString);
+    if (!unsafeDecoded || !unsafeDecoded.aud) {
+         return res.status(401).json({ error: "Invalid JWT structure" });
+    }
 
-    const unsafeDecoded = jwt.decode(decrypted);
-
-    const decoded = jwt.verify(decrypted, process.env.JWT_SECRET, {
+    // Verify the signature
+    const decoded = jwt.verify(rawJwtString, process.env.JWT_SECRET, {
       algorithms: ["HS512"],
       issuer: process.env.BACKEND_URL,
       audience: unsafeDecoded.aud
     });
-    console.log("sanjay decoded value ->>> ",decoded);
+
+    console.log("sanjay decoded value ->>> ", decoded);
 
     // 🧱 blacklist check
-
-    
-    const blacklisted = await redisClient.get(`blacklist:${decrypted}`);
+    const blacklisted = await redisClient.get(`blacklist:${rawJwtString}`);
     if (blacklisted) {
       return res.status(401).json({ error: "Session expired" });
     }
@@ -214,35 +224,32 @@ exports.tokenReads = async (req, res) => {
       },
     });
 
-   // ... existing code in tokenReads ...
-
     if (!session) {
       return res.status(401).json({ error: "Session not active" });
     }
 
-    // ✅ success - Add a clear flag for the frontend to stop looping
+    // ✅ success 
     const responseObj = {
       valid: true,
-      sessionValid: true, // 🚨 NEW FLAG
-      jwt: decrypted,
+      sessionValid: true, 
+      jwt: rawJwtString,
       data: decoded,
     };
 
     const jsonText = JSON.stringify(responseObj);
     const encryptedResponse = encryptToken(jsonText, secretKey);
 
-  return res.json({ 
-    valid: true,
-    sessionValid: true, // 🚨 Let the frontend know to stop looping
-    payload: encryptedResponse,
-    data: decoded 
-});
+    return res.json({ 
+        valid: true,
+        sessionValid: true, 
+        payload: encryptedResponse,
+        data: decoded 
+    });
 
   } catch (err) {
     console.error("tokenReads error:", err);
     return res.status(401).json({ error: "Invalid session" });
   }
-
 };
 
 

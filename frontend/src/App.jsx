@@ -8,10 +8,13 @@ import ProtectedRoute from "../components/ProtectedRoute";
 import Admin from "./pages/admin";
 import Departments from "./pages/Departments";
 import Logs from "./pages/logs";
-import TopNav from "../components/TopNav";
+import DashboardLayout from "../components/DashboardLayout";
 
+// 🚨 THE FIX: A Smart Login Redirector
+// If the user hits /login but is already authenticated, send them to the dashboard.
+// If they aren't authenticated, send them to the SSO Portal.
 const LoginRedirector = () => {
-    const { auth, loading, VITE_SSO_URL } = useAuth();
+    const { auth, loading, SSO_PORTAL_URL } = useAuth();
 
     if (loading) {
         return (
@@ -25,7 +28,7 @@ const LoginRedirector = () => {
         return <Navigate to="/dashboard" replace />;
     }
 
-    window.location.replace(VITE_SSO_URL);
+    window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
     return null;
 };
 
@@ -40,28 +43,25 @@ export default function App() {
                 
                 <Route path="/dashboard" element={
                     <ProtectedRoute>
-                        <div className="p-6">
-                            <TopNav title="Dashboard" subtitle="Overview" />
+                        <DashboardLayout title="Dashboard" subtitle="Overview">
                             <Admin /> 
-                        </div>
+                        </DashboardLayout>
                     </ProtectedRoute>
                 } />
 
                 <Route path="/departments" element={
                     <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN']}>
-                        <div className="p-6">
-                            <TopNav title="Manage Departments" />
+                        <DashboardLayout title="Manage Departments" subtitle="Organization Structure">
                             <Departments />
-                        </div>
+                        </DashboardLayout>
                     </ProtectedRoute>
                 } />
 
                 <Route path="/logs" element={
                     <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
-                        <div className="p-6">
-                            <TopNav title="System Logs" subtitle="Audit Trail" />
+                        <DashboardLayout title="System Logs" subtitle="Audit Trail">
                             <Logs />
-                        </div>
+                        </DashboardLayout>
                     </ProtectedRoute>
                 } />
                 

@@ -4,6 +4,7 @@ const path = require("path");
 
 const ALGORITHM = "aes-256-cbc";
 
+// 🚨 THE FIX: Removed "/keys" from the path so it looks in the root backend folder!
 const privateKey = fs.readFileSync(
   path.join(__dirname, "../private.pem"),
   "utf8"

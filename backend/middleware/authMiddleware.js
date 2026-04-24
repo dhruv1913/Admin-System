@@ -1,7 +1,7 @@
 const { errorResponse } = require('../utils/responseHandler');
 const { createClient, bind, search } = require('../services/ldapService');
 const { decryptToken } = require('../utils/Crypto'); 
-const jwt = require('jsonwebtoken'); // 🚨 REQUIRED
+const jwt = require('jsonwebtoken'); // 🚨 THIS IS CRITICAL
 
 const authMiddleware = async (req, res, next) => {
     let token;
@@ -15,47 +15,41 @@ const authMiddleware = async (req, res, next) => {
     if (!token) return errorResponse(res, "No token provided", 403);
 
     try {
+        const keysToTry = [
+            process.env.DEPT_SECRET_KEY, 
+            process.env.ENCRYPTION_SECRET
+        ];
+
+        let decrypted = null;
         const safeToken = String(token).replace(/ /g, '+');
-        let finalPayloadString = null;
 
-        // 1️⃣ SMART CHECK: Is the token already a Pure, Unencrypted JWT?
-        const rawDecoded = jwt.decode(safeToken);
-        if (rawDecoded && (rawDecoded.userId || rawDecoded.uid || rawDecoded.jti)) {
-            finalPayloadString = safeToken; // It's already pure! No decryption needed.
-        } else {
-            // 2️⃣ FALLBACK: It must be encrypted. Try to decrypt it.
-            const keysToTry = [
-                process.env.DEPT_SECRET_KEY, 
-                process.env.ENCRYPTION_SECRET,
-            ];
-
-            for (let secret of keysToTry) {
-                if (!secret) continue;
-                try {
-                    const cleanSecret = String(secret).replace(/^["']|["']$/g, '').trim();
-                    const decrypted = decryptToken(safeToken, cleanSecret);
-                    if (decrypted) {
-                        finalPayloadString = decrypted;
-                        break; 
-                    }
-                } catch (error) {
-                    continue; 
-                }
+        // 1️⃣ Decrypt the payload
+        for (let secret of keysToTry) {
+            if (!secret) continue;
+            try {
+                const cleanSecret = String(secret).replace(/^["']|["']$/g, '').trim();
+                decrypted = decryptToken(safeToken, cleanSecret);
+                if (decrypted) break; 
+            } catch (error) {
+                continue; 
             }
         }
 
-        if (!finalPayloadString) {
-            return errorResponse(res, "Unauthorized: Cannot parse or decrypt token", 401);
+        if (!decrypted) {
+            return errorResponse(res, "Unauthorized: Cannot decrypt token", 401);
         }
 
-        // 3️⃣ Extract user data
+        // 2️⃣ 🚨 THE FIX: Decode the JWT
         let userPayload = null;
         try {
-            let decoded = jwt.decode(finalPayloadString);
+            // Decrypt returns a JWT string (e.g., "eyJhbGciOiJIUzUxMi..."). We must decode it.
+            let decoded = jwt.decode(decrypted);
+            
             if (decoded) {
                 userPayload = decoded.data || decoded.user || decoded;
             } else {
-                const parsed = JSON.parse(finalPayloadString);
+                // Fallback just in case it ever IS pure JSON
+                const parsed = JSON.parse(decrypted);
                 userPayload = parsed.data || parsed.user || parsed;
             }
         } catch (e) {
@@ -74,7 +68,7 @@ const authMiddleware = async (req, res, next) => {
             name: userPayload.name || "User"
         };
 
-        // 4️⃣ LDAP permissions fetch
+        // 3️⃣ LDAP permissions fetch
         if ((req.user.role === "ADMIN" || req.user.role === "admin") && (!req.user.allowedOUs || req.user.allowedOUs.length === 0)) {
             const client = createClient();
             try {

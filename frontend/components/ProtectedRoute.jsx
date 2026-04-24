@@ -1,17 +1,16 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Navigate } from 'react-router-dom';
-import { useAuth } from '../src/context/AuthContext'; // Adjust path if needed
+import React, { useEffect, useState } from 'react';
+import { Navigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../src/context/AuthContext';
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
     // 1. Pull global auth state from Context
-    const { auth, loading: authLoading, SSO_PORTAL_URL } = useAuth();
-    
+    const { auth, loading: authLoading, SSO_PORTAL_URL, handleLogout } = useAuth();
+
     // 2. Local state for the specific Service Access Check
     const [serviceLoading, setServiceLoading] = useState(true);
     const [authenticated, setAuthenticated] = useState(false);
-    const fetchedsRef = useRef(false);
+    const location = useLocation();
 
-    // Load API URL and Service Key from your ENV
     const BASE_URL = import.meta.env.VITE_SSO_API_URL;
     const serviceKey = import.meta.env.VITE_SERVICE_KEY;
 
@@ -19,7 +18,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
     useEffect(() => {
         // Only kick if AuthContext completely finished and auth is definitively null
         if (!authLoading && !auth) {
-            window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
+            window.location.replace(SSO_PORTAL_URL);
         }
     }, [auth, authLoading, SSO_PORTAL_URL]);
 
@@ -28,8 +27,9 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
         // Wait for the AuthContext to finish loading first before hitting the service endpoint
         if (authLoading || !auth) return;
 
+        let isMounted = true;
+
         const checkServiceAccess = async () => {
-            console.log('sanjay - Checking service access...');
             try {
                 const res = await fetch(
                     `${BASE_URL}/service/${serviceKey}/data`,
@@ -39,31 +39,37 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
                     }
                 );
 
+                if (!isMounted) return;
+
                 if (!res.ok) {
                     setAuthenticated(false);
+                    handleLogout();
                     return;
                 }
 
                 const data = await res.json();
 
+                if (!isMounted) return;
+
                 if (data?.status === "success" && data?.tokenValid === true) {
                     setAuthenticated(true);
                 } else {
                     setAuthenticated(false);
+                    handleLogout();
                 }
             } catch (err) {
                 console.error("SSO service check failed", err);
-                setAuthenticated(false);
+                if (isMounted) setAuthenticated(false);
+                handleLogout();
             } finally {
-                setServiceLoading(false);
+                if (isMounted) setServiceLoading(false);
             }
         };
 
-        if (fetchedsRef.current) return;
-        fetchedsRef.current = true;
-        
         checkServiceAccess();
-    }, [auth, authLoading, BASE_URL, serviceKey]);
+
+        return () => { isMounted = false; };
+    }, [auth, authLoading, BASE_URL, serviceKey, location.pathname]);
 
 
     // --- RENDER LOGIC ---
@@ -80,7 +86,7 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 
     // 2. Global Auth Fail: Render nothing while useEffect 1 redirects to SSO
     if (!auth) {
-        return null; 
+        return null;
     }
 
     // 3. Service Access Fail: Redirect to local login boundary if service token is invalid
