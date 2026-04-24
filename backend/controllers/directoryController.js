@@ -7,7 +7,8 @@ const dbService = require('../services/dbService');
 const xlsx = require("xlsx");
 const crypto = require('crypto');
 const ldap = require('ldapjs');
-
+const fs = require('fs');
+const path = require('path');
 // ==========================================
 // HELPER FUNCTIONS
 // ==========================================
@@ -208,6 +209,14 @@ exports.addUser = async (req, res) => {
             labeledURI: `uploads/${uid}.jpg`
         });
 
+        if (req.file) {
+            const oldPath = req.file.path;
+            const newPath = path.join(req.file.destination, `${uid}.jpg`);
+            if (fs.existsSync(oldPath)) {
+                fs.renameSync(oldPath, newPath);
+            }
+        }
+
         await new Promise((resolve, reject) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
         });
@@ -268,6 +277,14 @@ exports.editUser = async (req, res) => {
             }
         }
 
+        if (req.file) {
+            const oldPath = req.file.path;
+            const newPath = path.join(req.file.destination, `${uid}.jpg`);
+            if (fs.existsSync(oldPath)) {
+                fs.renameSync(oldPath, newPath);
+            }
+        }
+        
         // 🚨 1. FIXED PASSWORD UPDATE FORMAT
        if (password && typeof password === 'string' && password.trim() !== "") {
             await dbService.updateUserPassword(uid, password);

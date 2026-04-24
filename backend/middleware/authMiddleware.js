@@ -27,8 +27,6 @@ const authMiddleware = async (req, res, next) => {
             const keysToTry = [
                 process.env.DEPT_SECRET_KEY, 
                 process.env.ENCRYPTION_SECRET,
-                "mySuperSecretKey123!@#4567890abcdef",
-                "12345678901234567890123456789012"
             ];
 
             for (let secret of keysToTry) {
