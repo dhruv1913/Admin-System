@@ -108,58 +108,20 @@ exports.getUsers = async (req, res) => {
     }
 };
 
-exports.exportUsers = async (req, res) => {
-    if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN") {
-        return errorResponse(res, "Unauthorized", 403);
-    }
 
-    const client = createClient();
-    try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        const users = await search(client, getOrgBase(), {
-            scope: "sub", filter: "(objectClass=inetOrgPerson)",
-            attributes: ["uid", "cn", "sn", "mail", "mobile", "businessCategory", "createTimestamp"]
-        });
-
-        let data = users.map(u => {
-            const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
-            return {
-                "User ID": Array.isArray(u.uid) ? u.uid[0] : u.uid,
-                "Name": Array.isArray(u.cn) ? u.cn[0] : u.cn,
-                "Email": Array.isArray(u.mail) ? u.mail[0] : (u.mail || ""),
-                "Mobile": Array.isArray(u.mobile) ? u.mobile[0] : (u.mobile || ""),
-                "Role": Array.isArray(u.businessCategory) ? u.businessCategory[0] : (u.businessCategory || "USER"),
-                "department": ouMatch ? ouMatch[1] : 'General'
-            };
-        });
-
-        // 🚨 Filter the export list for Admins too!
-        if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "super_admin") {
-            data = data.filter(u => isAllowedOU(req.user.allowedOUs, u.department));
-        }
-
-        // Clean off the internal 'department' tag before converting to Excel
-        data = data.map(({ department, ...rest }) => rest);
-
-        const wb = xlsx.utils.book_new();
-        const ws = xlsx.utils.json_to_sheet(data);
-        xlsx.utils.book_append_sheet(wb, ws, "Users");
-        const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
-
-        res.setHeader("Content-Disposition", "attachment; filename=Directory_Users.xlsx");
-        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        res.send(buffer);
-    } catch (err) {
-        return errorResponse(res, "Export failed", 500);
-    } finally {
-        client.unbind();
-    }
-};
 
 exports.addUser = async (req, res) => {
     const { uid, firstName, lastName, email, secondaryEmail, password, mobile, title, permissions, department, role } = req.body;
 
     if (!uid || !department || !password) return res.status(400).json({ message: "Missing fields" });
+
+    // 🚨 1. STRICT MOBILE VALIDATION (Cleaned and Cast to String)
+    if (mobile && String(mobile).trim() !== "") {
+        const cleanMobile = String(mobile).trim();
+        if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+            return res.status(400).json({ message: "Mobile number must be exactly 10 digits and start with 6, 7, 8, or 9." });
+        }
+    }
 
     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
         if (!req.user.canWrite || !isAllowedOU(req.user.allowedOUs, department)) {
@@ -170,25 +132,57 @@ exports.addUser = async (req, res) => {
     const client = createClient();
     try {
         const exists = await dbService.checkUserExists(uid);
-        if (exists) return res.status(400).json({ message: "UID already exists in database." });
+        if (exists) return res.status(400).json({ message: `UID '${uid}' already exists in database.` });
 
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const existingUid = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})` });
-        if (existingUid.length > 0) return res.status(400).json({ message: "UID already exists in directory." });
+        if (existingUid.length > 0) return res.status(400).json({ message: `UID '${uid}' already exists in directory.` });
 
+        // 🚨 2. GRANULAR DUPLICATE CHECK (Checks ONLY in the same Department)
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter) {
-            const duplicates = await search(client, `ou=${department},${getOrgBase()}`, { scope: "sub", filter: dupFilter, attributes: ['uid'] });
-            if (duplicates.length > 0) return res.status(400).json({ message: "Email or Mobile already exists in this department." });
+            const duplicates = await search(client, `ou=${department},${getOrgBase()}`, { 
+                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description'] 
+            });
+
+            if (duplicates.length > 0) {
+                for (let dup of duplicates) {
+                    const dupUid = String(Array.isArray(dup.uid) ? dup.uid[0] : dup.uid || "").trim();
+                    const dupMail = String(Array.isArray(dup.mail) ? dup.mail[0] : dup.mail || "").trim().toLowerCase();
+                    const dupMobile = String(Array.isArray(dup.mobile) ? dup.mobile[0] : dup.mobile || "").trim();
+                    const dupSec = String(Array.isArray(dup.description) ? dup.description[0] : dup.description || "").trim().toLowerCase();
+
+                    const reqEmail = String(email || "").trim().toLowerCase();
+                    const reqMobile = String(mobile || "").trim();
+                    const reqSec = String(secondaryEmail || "").trim().toLowerCase();
+
+                    if (reqEmail && dupMail && dupMail === reqEmail) {
+                        return res.status(400).json({ message: `Email '${email}' is already used by user '${dupUid}' in this department.` });
+                    }
+                    if (reqMobile && dupMobile && dupMobile === reqMobile) {
+                        return res.status(400).json({ message: `Mobile '${mobile}' is already used by user '${dupUid}' in this department.` });
+                    }
+                    if (reqSec && dupSec && dupSec === reqSec) {
+                        return res.status(400).json({ message: `Secondary Email '${secondaryEmail}' is already used by user '${dupUid}' in this department.` });
+                    }
+                }
+            }
         }
 
+        // 🚨 3. NAME DUPLICATE CHECK
+        const cn = `${firstName} ${lastName}`.trim();
+        const nameDuplicates = await search(client, `ou=${department},${getOrgBase()}`, { scope: "sub", filter: `(cn=${cn})`, attributes: ['uid'] });
+        if (nameDuplicates.length > 0) {
+            const dupUid = Array.isArray(nameDuplicates[0].uid) ? nameDuplicates[0].uid[0] : nameDuplicates[0].uid;
+            return res.status(400).json({ message: `The name '${cn}' is already used by user '${dupUid}' in this department.` });
+        }
+
+        // If all validations pass, Create User
         const newUserDN = `uid=${uid},ou=${department},${getOrgBase()}`;
         const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
 
-        // 🚨 IMPORTANT: Make sure your PG database actually has the 'ldap_user_dn' column!
         await dbService.insertUserMapping(uid, password, userIP, newUserDN);
-
         const ldapPassword = generateSSHA(password);
 
         let formattedPermissions = undefined;
@@ -200,7 +194,7 @@ exports.addUser = async (req, res) => {
 
         const entry = cleanEntry({
             objectClass: ["top", "person", "organizationalPerson", "inetOrgPerson"],
-            cn: `${firstName} ${lastName}`, sn: lastName, uid: uid,
+            cn: cn, sn: lastName, uid: uid,
             userPassword: ldapPassword, employeeType: "active",
             businessCategory: role || "USER", mail: email, description: secondaryEmail,
             mobile: mobile, title: title || "Employee",
@@ -212,17 +206,13 @@ exports.addUser = async (req, res) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
         });
 
-        await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${firstName} ${lastName}`);
+        await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${cn}`);
         return successResponse(res, null, "User created successfully");
 
     } catch (err) {
-        // 🚨 FIXED: The backend console will now tell you exactly what failed
         console.error("🔥 Add User Error:", err);
-
-        // 🚨 FIXED: Added the missing 'return' keyword
         return res.status(500).json({ message: "Server Error" });
     } finally {
-        // 🚨 FIXED: Moved unbind here so it ALWAYS executes, stopping connection leaks
         try { client.unbind(); } catch (e) { }
     }
 };
@@ -231,16 +221,22 @@ exports.editUser = async (req, res) => {
     const { uid, firstName, lastName, email, secondaryEmail, title, mobile, employeeType, permissions, role, password } = req.body;
     if (!uid) return res.status(400).json({ message: "UID required" });
 
+    // 🚨 1. STRICT MOBILE VALIDATION FOR EDITING
+    if (mobile && String(mobile).trim() !== "") {
+        const cleanMobile = String(mobile).trim();
+        if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+            return res.status(400).json({ message: "Mobile number must be exactly 10 digits and start with 6, 7, 8, or 9." });
+        }
+    }
+
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
-        // 1. Get the user's current DN
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
         if (users.length === 0) return res.status(404).json({ message: "User not found" });
         const userDN = users[0].dn;
 
-        // 2. Extract the user's current Department (OU) BEFORE checking for duplicates
         const ouMatch = userDN.match(/ou=([^,]+)/i);
         const currentOU = ouMatch ? ouMatch[1] : null;
 
@@ -250,45 +246,65 @@ exports.editUser = async (req, res) => {
             }
         }
 
-        // 3. ✅ FIXED: Search for duplicates ONLY within the user's current department!
+        // 🚨 2. GRANULAR DUPLICATE CHECK FOR EDITING
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter && currentOU) {
-            const searchBase = `ou=${currentOU},${getOrgBase()}`; // Only look in this OU
-            const duplicates = await search(client, searchBase, { scope: "sub", filter: dupFilter, attributes: ['uid'] });
-
-            const conflict = duplicates.find(u => {
-                const uID = Array.isArray(u.uid) ? u.uid[0] : u.uid;
-                return uID !== uid;
+            const duplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, { 
+                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description'] 
             });
 
-            if (conflict) {
-                return res.status(400).json({
-                    message: `Conflict: Email or Mobile already used by ${conflict.uid} in the ${currentOU} department.`
-                });
+            // Filter out the user we are currently editing
+            const conflicts = duplicates.filter(u => {
+                const uID = Array.isArray(u.uid) ? u.uid[0] : u.uid;
+                return String(uID).trim() !== String(uid).trim();
+            });
+
+            if (conflicts.length > 0) {
+                for (let dup of conflicts) {
+                    const dupUid = String(Array.isArray(dup.uid) ? dup.uid[0] : dup.uid || "").trim();
+                    const dupMail = String(Array.isArray(dup.mail) ? dup.mail[0] : dup.mail || "").trim().toLowerCase();
+                    const dupMobile = String(Array.isArray(dup.mobile) ? dup.mobile[0] : dup.mobile || "").trim();
+                    const dupSec = String(Array.isArray(dup.description) ? dup.description[0] : dup.description || "").trim().toLowerCase();
+
+                    const reqEmail = String(email || "").trim().toLowerCase();
+                    const reqMobile = String(mobile || "").trim();
+                    const reqSec = String(secondaryEmail || "").trim().toLowerCase();
+
+                    if (reqEmail && dupMail && dupMail === reqEmail) {
+                        return res.status(400).json({ message: `Conflict: Email '${email}' is already used by '${dupUid}' in this department.` });
+                    }
+                    if (reqMobile && dupMobile && dupMobile === reqMobile) {
+                        return res.status(400).json({ message: `Conflict: Mobile '${mobile}' is already used by '${dupUid}' in this department.` });
+                    }
+                    if (reqSec && dupSec && dupSec === reqSec) {
+                        return res.status(400).json({ message: `Conflict: Secondary Email '${secondaryEmail}' is already used by '${dupUid}' in this department.` });
+                    }
+                }
             }
         }
 
-        // 🚨 1. FIXED PASSWORD UPDATE FORMAT
+        // 🚨 3. NAME DUPLICATE CHECK FOR EDITING
+        if (firstName && lastName) {
+            const cn = `${firstName} ${lastName}`.trim();
+            const nameDuplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, { scope: "sub", filter: `(&(cn=${cn})(!(uid=${uid})))`, attributes: ['uid'] });
+            if (nameDuplicates.length > 0) {
+                const dupUid = Array.isArray(nameDuplicates[0].uid) ? nameDuplicates[0].uid[0] : nameDuplicates[0].uid;
+                return res.status(400).json({ message: `Conflict: The name '${cn}' is already used by '${dupUid}' in this department.` });
+            }
+        }
+
         if (password && typeof password === 'string' && password.trim() !== "") {
             await dbService.updateUserPassword(uid, password);
-
-
             const ldapPassword = generateSSHA(password);
             await new Promise((resolve, reject) => {
-                const change = new ldap.Change({
-                    operation: 'replace',
-                    modification: { type: 'userPassword', values: [ldapPassword] }
-                });
+                const change = new ldap.Change({ operation: 'replace', modification: { type: 'userPassword', values: [ldapPassword] }});
                 client.modify(userDN, change, (err) => err ? reject(err) : resolve());
             });
         }
 
-        // Update Postgres DB Status
         if (employeeType) {
-            // Safely extract string whether it's an Array or a String
             const typeStr = Array.isArray(employeeType) ? employeeType[0] : employeeType;
-            const isActive = (String(typeStr).toLowerCase() === "active");
-            await dbService.updateUserStatus(uid, isActive);
+            await dbService.updateUserStatus(uid, (String(typeStr).toLowerCase() === "active"));
         }
 
         const changes = cleanEntry({
@@ -299,60 +315,34 @@ exports.editUser = async (req, res) => {
             labeledURI: req.file ? `uploads/${uid}.jpg` : undefined
         });
 
-        // 🚨 2. FIXED LDAP PROFILE & STATUS UPDATE LOOP
         for (const [key, value] of Object.entries(changes)) {
             try {
                 await new Promise((resolve, reject) => {
-                    const change = new ldap.Change({
-                        operation: 'replace',
-                        modification: { type: key, values: [String(value)] }
-                    });
+                    const change = new ldap.Change({ operation: 'replace', modification: { type: key, values: [String(value)] } });
                     client.modify(userDN, change, (err) => err ? reject(err) : resolve());
                 });
             } catch (e) {
                 if (e.code === 16 || e.code === 32 || (e.message && e.message.includes("NoSuchAttribute"))) {
                     try {
                         await new Promise((resolve, reject) => {
-                            const change = new ldap.Change({
-                                operation: 'add',
-                                modification: { type: key, values: [String(value)] }
-                            });
+                            const change = new ldap.Change({ operation: 'add', modification: { type: key, values: [String(value)] } });
                             client.modify(userDN, change, (err) => err ? reject(err) : resolve());
                         });
-                    } catch (addErr) {
-                        console.error(`LDAP Add Error for ${key}:`, addErr);
-                    }
-                } else {
-                    console.error(`LDAP Modify Error for ${key}:`, e);
+                    } catch (addErr) { console.error(`LDAP Add Error for ${key}:`, addErr); }
                 }
             }
         }
 
-        const displayName = (firstName && lastName)
-            ? `${firstName} ${lastName} (${uid})`
-            : `user ${uid}`;
-
-        // 2. Determine the exact action taken
-        let actionMsg = "";
-        if (employeeType) {
-            actionMsg = `Changed account status to ${employeeType.toUpperCase()} for ${displayName}`;
-        } else if (password) {
-            actionMsg = `Reset password for ${displayName}`;
-        } else {
-            actionMsg = `Updated profile details (name, email, etc.) for ${displayName}`;
-        }
-
-        const finalStatus = employeeType ? employeeType.toUpperCase() : "ACTIVE";
-
-        await logAction(req, "UPDATE_USER", req.user?.uid || "Admin", finalStatus, actionMsg);
-
+        let actionMsg = employeeType ? `Changed status for ${uid}` : password ? `Reset password for ${uid}` : `Updated details for ${uid}`;
+        await logAction(req, "UPDATE_USER", req.user?.uid || "Admin", employeeType ? employeeType.toUpperCase() : "ACTIVE", actionMsg);
         return successResponse(res, { uid }, actionMsg);
 
     } catch (err) {
         console.error("Edit Error:", err);
         return res.status(500).json({ message: "Update failed" });
+    } finally {
+        try { client.unbind(); } catch (e) { }
     }
-    try { client.unbind(); } catch (e) { }
 };
 
 exports.deleteUser = async (req, res) => {
@@ -393,82 +383,242 @@ exports.deleteUser = async (req, res) => {
 exports.bulkImport = async (req, res) => {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const rawData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
-    if (rawData.length === 0) return res.status(400).json({ message: "Excel file is empty" });
-
     const client = createClient();
-    const summary = { success: 0, failed: 0, errors: [] };
-
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        
+        // 1. Read Excel
+        const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const data = xlsx.utils.sheet_to_json(sheet);
 
-        for (const [index, row] of rawData.entries()) {
-            const rowNum = index + 2;
+        const summary = { success: 0, failed: 0, errors: [] };
+
+        // 2. Fetch all existing users to check for duplicates inside the same OU
+        const existingUsers = await search(client, getOrgBase(), { 
+            scope: "sub", 
+            filter: "(objectClass=inetOrgPerson)", 
+            attributes: ["uid", "mail", "mobile", "cn", "description", "dn"] 
+        });
+
+        // Group existing users by their OU (Department)
+        const usersByOu = {};
+        existingUsers.forEach(u => {
+            const match = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
+            const ou = match ? match[1].toLowerCase() : 'general';
+            if (!usersByOu[ou]) usersByOu[ou] = [];
+            usersByOu[ou].push({
+                uid: String(Array.isArray(u.uid) ? u.uid[0] : u.uid || "").trim().toLowerCase(),
+                email: String(Array.isArray(u.mail) ? u.mail[0] : u.mail || "").trim().toLowerCase(),
+                mobile: String(Array.isArray(u.mobile) ? u.mobile[0] : u.mobile || "").trim(),
+                cn: String(Array.isArray(u.cn) ? u.cn[0] : u.cn || "").trim().toLowerCase(),
+                secondaryEmail: String(Array.isArray(u.description) ? u.description[0] : u.description || "").trim().toLowerCase()
+            });
+        });
+
+        // Track rows processed in THIS Excel file to prevent duplicate rows from passing
+        const excelProcessedByOu = {};
+
+        // 3. Process each row
+        for (let i = 0; i < data.length; i++) {
+            const row = data[i];
+            const rowNum = i + 2; // Excel row number (accounting for 0-index and header)
+            
+            // Normalize column headers so spaces/capitalization don't break the import
             const user = {};
             Object.keys(row).forEach(k => {
                 const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, "");
-                if (cleanKey === 'mobile' || cleanKey === 'mobileno' || cleanKey === 'phone') user.mobile = row[k];
-                else if (cleanKey === 'secondaryemail' || cleanKey === 'altemail' || cleanKey === 'description') user.secondaryemail = row[k];
+                if (['mobile', 'mobileno', 'phone'].includes(cleanKey)) user.mobile = row[k];
+                else if (['secondaryemail', 'altemail', 'description'].includes(cleanKey)) user.secondaryEmail = row[k];
                 else if (cleanKey === 'firstname') user.firstname = row[k];
                 else if (cleanKey === 'lastname') user.lastname = row[k];
                 else user[cleanKey] = row[k];
             });
 
-            if (!user.uid || !user.department || !user.password || !user.firstname || !user.lastname) {
-                summary.failed++;
-                summary.errors.push(`Row ${rowNum}: Missing required fields`);
-                continue;
+            // Extract Variables
+            const uid = user.uid ? String(user.uid).trim() : null;
+            const fName = user.firstname ? String(user.firstname).trim() : "";
+            const lName = user.lastname ? String(user.lastname).trim() : "";
+            const email = user.email ? String(user.email).trim() : "";
+            const department = user.department ? String(user.department).trim() : "General";
+            const secondaryEmail = user.secondaryEmail ? String(user.secondaryEmail).trim() : "";
+            const password = user.password ? String(user.password) : "Password@123";
+            const role = user.role ? String(user.role).trim().toUpperCase() : "USER";
+            
+            const cn = `${fName} ${lName}`.trim();
+            const ouKey = department.toLowerCase();
+
+            // 🚨 BASIC VALIDATION
+            if (!uid || !fName) { 
+                summary.failed++; 
+                summary.errors.push(`Row ${rowNum}: Missing required fields (uid or firstname).`); 
+                continue; 
             }
 
+            // 🚨 PERMISSIONS CHECK
             if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
-                if (!isAllowedOU(req.user.allowedOUs, user.department)) {
+                if (!isAllowedOU(req.user.allowedOUs, department)) {
                     summary.failed++;
-                    summary.errors.push(`Row ${rowNum} (${user.uid}): Unauthorized.`);
+                    summary.errors.push(`Row ${rowNum} (${uid}): Unauthorized to add users to department '${department}'.`);
                     continue;
                 }
             }
 
+            // 🚨 STRICT EXCEL MOBILE VALIDATION (Fixes formatting issues)
+            let cleanMobile = "";
+            if (user.mobile !== undefined && user.mobile !== null && String(user.mobile).trim() !== "") {
+                // Strips spaces, dashes, +91, and grabs EXACTLY the last 10 digits
+                cleanMobile = String(user.mobile).replace(/\D/g, '').slice(-10);
+                
+                if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
+                    summary.failed++; 
+                    summary.errors.push(`Row ${rowNum} (${uid}): Invalid mobile '${user.mobile}'. Must be exactly 10 digits starting with 6, 7, 8, or 9.`); 
+                    continue;
+                }
+            } else {
+                summary.failed++; 
+                summary.errors.push(`Row ${rowNum} (${uid}): Mobile number is strictly required.`); 
+                continue;
+            }
+
+            // 🚨 SAME-DEPARTMENT DUPLICATE VALIDATION
+            if (!usersByOu[ouKey]) usersByOu[ouKey] = [];
+            if (!excelProcessedByOu[ouKey]) excelProcessedByOu[ouKey] = [];
+
+            const ouExisting = usersByOu[ouKey];
+            const ouExcel = excelProcessedByOu[ouKey];
+
+            // Helper to check for matches
+            const isDuplicate = (field, value) => {
+                if (!value || value === "") return false;
+                const valLower = String(value).toLowerCase();
+                return ouExisting.some(u => u[field] && String(u[field]).toLowerCase() === valLower) || 
+                       ouExcel.some(u => u[field] && String(u[field]).toLowerCase() === valLower);
+            };
+
+            if (isDuplicate('uid', uid)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): UID already exists.`); continue; }
+            if (isDuplicate('mobile', cleanMobile)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Mobile '${cleanMobile}' already exists in dept '${department}'.`); continue; }
+            if (isDuplicate('email', email)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Email already exists in dept '${department}'.`); continue; }
+            if (isDuplicate('secondaryEmail', secondaryEmail)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Secondary Email exists in dept '${department}'.`); continue; }
+            if (isDuplicate('cn', cn)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Name '${cn}' already exists in dept '${department}'.`); continue; }
+
+            // Add to processed list so we don't allow identical rows in the same Excel file
+            excelProcessedByOu[ouKey].push({ uid, email, mobile: cleanMobile, cn, secondaryEmail });
+
+            // 🚨 INSERT TO DB & LDAP
+            const dn = `uid=${uid},ou=${department},${getOrgBase()}`;
+            const entry = {
+                cn, 
+                sn: lName || fName, 
+                uid: uid, 
+                mail: email || undefined, 
+                mobile: cleanMobile, 
+                description: secondaryEmail || undefined,
+                businessCategory: role, 
+                employeeType: "ACTIVE",
+                userPassword: generateSSHA(password), 
+                objectClass: ["inetOrgPerson", "top"]
+            };
+
             try {
-                const exists = await dbService.checkUserExists(user.uid);
-                if (exists) throw new Error(`UID '${user.uid}' already exists in Database`);
+                // Pre-check DB Mapping
+                const dbExists = await dbService.checkUserExists(uid);
+                if (dbExists) {
+                    summary.failed++; 
+                    summary.errors.push(`Row ${rowNum} (${uid}): UID already exists in PostgreSQL Database.`); 
+                    continue;
+                }
 
-                const newUserDN = `uid=${user.uid},ou=${user.department},${getOrgBase()}`;
                 const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+                await dbService.insertUserMapping(uid, password, userIP, dn);
 
-                await dbService.insertUserMapping(user.uid, user.password, userIP, newUserDN);
-
-                const ldapPassword = generateSSHA(user.password);
-                const entry = cleanEntry({
-                    objectClass: ["top", "person", "organizationalPerson", "inetOrgPerson"],
-                    cn: `${user.firstname} ${user.lastname}`, sn: user.lastname, uid: user.uid,
-                    userPassword: ldapPassword, employeeType: "active",
-                    businessCategory: (user.role || "USER").toUpperCase(),
-                    mail: user.email, description: user.secondaryemail,
-                    mobile: user.mobile ? user.mobile.toString() : undefined,
-                    title: user.title || "Employee",
-                    departmentNumber: user.permissions ? user.permissions.split(',').map(s => "ALLOW:" + s.trim()) : undefined,
-                    labeledURI: `uploads/${user.uid}.jpg`
-                });
-
+                // Add to LDAP
                 await new Promise((resolve, reject) => {
-                    client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
+                    client.add(dn, cleanEntry(entry), (err) => err ? reject(err) : resolve());
                 });
-
+                
                 summary.success++;
             } catch (err) {
-                summary.failed++;
-                summary.errors.push(`Row ${rowNum} (${user.uid}): ${err.message}`);
+                summary.failed++; 
+                summary.errors.push(`Row ${rowNum} (${uid}): LDAP Error - ${err.message}`);
             }
         }
-        await logAction(req, "BULK_IMPORT", "Batch", "N/A", "ACTIVE", `Imported ${summary.success} users, Failed: ${summary.failed}`);
-        return successResponse(res, { summary }, "Bulk import complete");
+
+        await logAction(req, "BULK_IMPORT", req.user?.uid || "Admin", req.user?.role, "ACTIVE", `Imported ${summary.success} users`);
+        return res.status(200).json({ summary });
 
     } catch (err) {
-        console.error("Bulk upload fatal error:", err);
-        res.status(500).json({ message: "Server Error during bulk upload" });
+        console.error("Bulk Import Error:", err);
+        return res.status(500).json({ message: "Bulk import failed: " + err.message });
+    } finally {
+        try { client.unbind(); } catch (e) {}
+    }
+};
+
+exports.exportUsers = async (req, res) => {
+    if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "ADMIN" && req.user.role !== "super_admin") {
+        return errorResponse(res, "Unauthorized", 403);
+    }
+
+    const client = createClient();
+    try {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        
+        // 🚨 UPDATE: Added "description" (secondary email) to attributes to fetch
+        const users = await search(client, getOrgBase(), {
+            scope: "sub", filter: "(objectClass=inetOrgPerson)",
+            attributes: ["uid", "cn", "sn", "mail", "mobile", "businessCategory", "description", "createTimestamp"]
+        });
+
+        let data = users.map(u => {
+            const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
+            
+            const rawCn = Array.isArray(u.cn) ? u.cn[0] : (u.cn || "");
+            const rawSn = Array.isArray(u.sn) ? u.sn[0] : (u.sn || "");
+
+            // Cleanly split first and last name
+            let fName = rawCn;
+            let lName = rawSn;
+
+            if (rawCn.includes(" ")) {
+                fName = rawCn.split(" ")[0];
+                lName = rawSn || rawCn.substring(rawCn.indexOf(" ") + 1);
+            } else if (!rawSn || rawSn.toLowerCase() === rawCn.toLowerCase()) {
+                lName = ""; 
+            }
+
+            // 🚨 EXACT MATCH TO YOUR IMPORT TEMPLATE HEADERS
+            return {
+                "uid": Array.isArray(u.uid) ? u.uid[0] : u.uid,
+                "firstname": fName,
+                "lastname": lName,
+                "email": Array.isArray(u.mail) ? u.mail[0] : (u.mail || ""),
+                "department": ouMatch ? ouMatch[1] : 'General',
+                "password": "", // Blank for security, ready for template reuse
+                "role": Array.isArray(u.businessCategory) ? u.businessCategory[0] : (u.businessCategory || "USER"),
+                "secondary email": Array.isArray(u.description) ? u.description[0] : (u.description || ""),
+                "Mobile": Array.isArray(u.mobile) ? u.mobile[0] : (u.mobile || "")
+            };
+        });
+
+        // Filter the export list for Admins so they only see their allowed OUs
+        if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "super_admin") {
+            data = data.filter(u => isAllowedOU(req.user.allowedOUs, u.department));
+        }
+
+        // 🚨 REMOVED: We no longer strip the "department" field out, so it stays in the Excel file!
+
+        const wb = xlsx.utils.book_new();
+        const ws = xlsx.utils.json_to_sheet(data);
+        xlsx.utils.book_append_sheet(wb, ws, "Users");
+        const buffer = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+        res.setHeader("Content-Disposition", "attachment; filename=Directory_Users.xlsx");
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.send(buffer);
+    } catch (err) {
+        console.error("Export Error:", err);
+        return errorResponse(res, "Export failed", 500);
     } finally {
         client.unbind();
     }

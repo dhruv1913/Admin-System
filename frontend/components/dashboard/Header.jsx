@@ -47,19 +47,6 @@ export default function Header({ collapsed, title, subtitle }) {
           />
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex items-center gap-2">
-          <div className="p-2 hover:bg-white/10 rounded-full cursor-pointer text-white transition-colors">
-            <Bell size={18} />
-          </div>
-
-          {/* <Button 
-            icon={<LogOut size={16} />} 
-            label="Logout" 
-            onClick={handleLogout} 
-            className="bg-red-500 hover:bg-red-600 text-white border-none text-xs h-8 px-3 rounded-lg transition-all"
-          /> */}
-        </div>
       </div>
     </header>
   );

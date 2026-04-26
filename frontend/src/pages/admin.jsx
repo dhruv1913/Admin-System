@@ -56,6 +56,8 @@ export default function Admin() {
     const [bulkReport, setBulkReport] = useState({ success: 0, failed: 0, errors: [] });
     const fileUploadRef = useRef(null);
 
+    const [deptSearch, setDeptSearch] = useState('');
+
     const initialForm = {
         firstName: "", lastName: "", email: "", secondaryEmail: "",
         mobile: "", uid: "", password: "", department: "", title: "",
@@ -98,7 +100,7 @@ export default function Admin() {
         }
     };
 
-    const getFilteredUsers = () => {
+   const getFilteredUsers = () => {
         let filtered = users.filter(u => {
             if (selectedDeptFilter && selectedDeptFilter.length > 0 && !selectedDeptFilter.includes(u.department)) return false;
             if (selectedRoleFilter && u.role !== selectedRoleFilter) return false;
@@ -109,12 +111,15 @@ export default function Admin() {
         if (globalFilter) {
             const q = globalFilter.toLowerCase();
             filtered = filtered.filter(u =>
-                (u.cn && u.cn.toLowerCase().includes(q)) ||
-                (u.firstName && u.firstName.toLowerCase().includes(q)) ||
-                (u.lastName && u.lastName.toLowerCase().includes(q)) ||
-                (u.uid && u.uid.toLowerCase().includes(q)) ||
-                (u.email && u.email.toLowerCase().includes(q)) ||
-                (u.department && u.department.toLowerCase().includes(q))
+                // 🚨 THE FIX: Wrapped every variable in String() so Numbers don't crash React!
+                (u.cn && String(u.cn).toLowerCase().includes(q)) ||
+                (u.firstName && String(u.firstName).toLowerCase().includes(q)) ||
+                (u.lastName && String(u.lastName).toLowerCase().includes(q)) ||
+                (u.uid && String(u.uid).toLowerCase().includes(q)) ||
+                (u.email && String(u.email).toLowerCase().includes(q)) ||
+                (u.department && String(u.department).toLowerCase().includes(q)) ||
+                (u.mobile && String(u.mobile).toLowerCase().includes(q)) || 
+                (u.secondaryEmail && String(u.secondaryEmail).toLowerCase().includes(q)) 
             );
         }
         return filtered;
@@ -129,7 +134,7 @@ export default function Admin() {
         setCurrentPage(1);
     }, [globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter, rowsPerPage]);
 
-    const handleToggle = async (user) => {
+  const handleToggle = async (user) => {
         if (!hasWriteAccess) return;
         const currentStatus = user.status;
         const newStatus = currentStatus === "ACTIVE" ? "INACTIVE" : "ACTIVE";
@@ -137,10 +142,16 @@ export default function Admin() {
         setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, status: newStatus } : u));
         try {
             const data = new FormData();
-            const { payload, key, iv } = await securePayload({ uid: user.uid, employeeType: newStatus, role: user.role, email: user.email });
+            
+            // Destructure ONLY the payload
+            const { payload } = await securePayload({ 
+                uid: user.uid, 
+                employeeType: newStatus, 
+                role: user.role, 
+                email: user.email 
+            });
+            
             data.append("payload", payload);
-            data.append("key", key);
-            data.append("iv", iv);
 
             await editUser(data);
             showToast(`${user.firstName} is now ${newStatus}`, 'success');
@@ -175,22 +186,19 @@ export default function Admin() {
         setProductDialog(true);
     };
 
-    const handleSubmit = async (e) => {
+  const handleSubmit = async (e) => {
         e.preventDefault();
 
         try {
-            const encryptedData = await securePayload(formData);
+            // Only extract payload from the new AES securePayload function
+            const { payload } = await securePayload(formData);
             const submitData = new FormData();
 
+            // Send only the payload in the JSON string
             submitData.append("data", JSON.stringify({
-                payload: encryptedData.payload,
-                key: encryptedData.key,
-                iv: encryptedData.iv
+                payload: payload
             }));
 
-            // Ensure the server's multer filename handler can see the uid
-            // (multer runs before the decrypt middleware). This lets the
-            // backend name the uploaded picture as `<uid>.jpg`.
             if (formData.uid) submitData.append("uid", formData.uid);
 
             if (selectedFile) {
@@ -298,14 +306,7 @@ export default function Admin() {
                             >
                                 <Plus size={18} /> Add User
                             </button>
-                            {(auth.role || "").toUpperCase() === "SUPER_ADMIN" && (
-                                <button
-                                    onClick={() => navigate("/departments")}
-                                    className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-bold text-sm transition-all hover:bg-gray-50 dark:hover:bg-gray-700"
-                                >
-                                    <GitBranch size={18} /> Manage Depts
-                                </button>
-                            )}
+                            
 
                             <div className="relative">
                                 <button
@@ -362,8 +363,18 @@ export default function Admin() {
                         </span>
                         <ChevronDown size={16} className="text-gray-400" />
                     </button>
-                    {showDeptDropdown && (
+                   {showDeptDropdown && (
                         <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-xl max-h-60 overflow-y-auto p-2 animate-in zoom-in-95 duration-200">
+                            {/* 🚨 NEW: Search Input inside Dropdown */}
+                            <div className="mb-2 p-1">
+                                <input
+                                    type="text"
+                                    placeholder="Search Dept..."
+                                    value={deptSearch}
+                                    onChange={(e) => setDeptSearch(e.target.value)}
+                                    className="w-full px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-indigo-500 bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300"
+                                />
+                            </div>
                             <div className="p-2 border-b border-gray-50 dark:border-gray-700 mb-1">
                                 <button
                                     onClick={() => setSelectedDeptFilter([])}
@@ -372,7 +383,8 @@ export default function Admin() {
                                     Clear Selection
                                 </button>
                             </div>
-                            {ous.map(ou => (
+                            {/* 🚨 NEW: Filters the OUs based on the search box */}
+                            {ous.filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase())).map(ou => (
                                 <label key={ou.value} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg cursor-pointer transition-colors">
                                     <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedDeptFilter.includes(ou.value) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'
                                         }`}>

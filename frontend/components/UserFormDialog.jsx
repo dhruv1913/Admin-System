@@ -143,6 +143,9 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                         <input 
                             type="tel" 
                             maxLength={10} 
+                            // 🚨 THE FIX: HTML5 Regex Pattern for 6,7,8,9 + 9 more digits
+                            pattern="^[6789]\d{9}$" 
+                            title="Mobile number must be exactly 10 digits and start with 6, 7, 8, or 9"
                             value={formData.mobile} 
                             onChange={(e) => {
                                 const val = e.target.value.replace(/\D/g, '').slice(0, 10);
