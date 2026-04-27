@@ -58,56 +58,93 @@ const buildDuplicateFilter = (email, mobile, secondaryEmail) => {
 
 // 
 exports.getUsers = async (req, res) => {
+    // 🚨 THE FIX: Alias 'search' to 'searchQuery' so it doesn't overwrite your LDAP function!
+    const { page = 1, limit = 10, search: searchQuery = "", dept = "", role = "", status = "" } = req.query;
+    
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        const filter = req.params.ou === "all" ? "(objectClass=inetOrgPerson)" : `(&(objectClass=inetOrgPerson)(ou=${req.params.ou}))`;
+        
+        // 2. Build a highly efficient LDAP Filter using 'searchQuery'
+        let baseFilter = "(objectClass=inetOrgPerson)";
+        if (searchQuery) {
+            const q = searchQuery.trim();
+            baseFilter = `(&(objectClass=inetOrgPerson)(|(cn=*${q}*)(uid=*${q}*)(mail=*${q}*)(mobile=*${q}*)(description=*${q}*)))`;
+        }
 
+        // 3. Now the imported 'search' function works perfectly again!
         const users = await search(client, getOrgBase(), {
             scope: "sub",
-            filter: filter,
+            filter: baseFilter,
             attributes: ["uid", "cn", "sn", "mail", "description", "mobile", "businessCategory", "employeeType", "departmentNumber", "createTimestamp", "labeledURI"]
         });
 
+        // 4. Format the data 
         let processedUsers = users.map(u => {
             const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
-
             const rawCn = Array.isArray(u.cn) ? u.cn[0] : (u.cn || "Unknown");
             const rawSn = Array.isArray(u.sn) ? u.sn[0] : (u.sn || "");
 
-            // 🚨 SMART SPLITTER: Extracts First & Last Name cleanly without duplicating
             let fName = rawCn;
             let lName = rawSn;
-
             if (rawCn.includes(" ")) {
                 fName = rawCn.split(" ")[0];
                 lName = rawSn || rawCn.substring(rawCn.indexOf(" ") + 1);
             } else if (!rawSn || rawSn.toLowerCase() === rawCn.toLowerCase()) {
-                lName = ""; // Prevent "au au" or "Dhruv Dhruv" duplication
+                lName = ""; 
             }
 
             return {
                 ...u,
                 department: ouMatch ? ouMatch[1] : 'General',
                 firstName: fName,
-                lastName: lName
+                lastName: lName,
+                status: String(Array.isArray(u.employeeType) ? u.employeeType[0] : u.employeeType || "ACTIVE").toUpperCase(),
+                role: String(Array.isArray(u.businessCategory) ? u.businessCategory[0] : u.businessCategory || "USER").toUpperCase(),
+                uid: Array.isArray(u.uid) ? u.uid[0] : u.uid,
+                email: Array.isArray(u.mail) ? u.mail[0] : u.mail,
+                mobile: Array.isArray(u.mobile) ? u.mobile[0] : (u.mobile || ""),
+                secondaryEmail: Array.isArray(u.description) ? u.description[0] : (u.description || ""),
+                labeledURI: Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || ""),
+                createTimestamp: u.createTimestamp || "00000000000000Z"
             };
         });
 
-        // 🚨 CRITICAL FIX: Filter out users not in the Admin's allowedOUs
-        console.log("Token User Request:", JSON.stringify(req.user));
+        // Apply strict Backend filters
+        if (dept) {
+            const deptArray = dept.split(',').map(d => d.trim().toLowerCase());
+            processedUsers = processedUsers.filter(u => deptArray.includes(String(u.department).toLowerCase()));
+        }
+        if (role) processedUsers = processedUsers.filter(u => u.role === role);
+        if (status) processedUsers = processedUsers.filter(u => u.status === status);
+
         if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "super_admin") {
             processedUsers = processedUsers.filter(u => isAllowedOU(req.user.allowedOUs, u.department));
         }
 
-        return successResponse(res, processedUsers, "Users retrieved");
+        // Sort by newest
+        processedUsers.sort((a, b) => (a.createTimestamp < b.createTimestamp ? 1 : -1));
+
+        // Slice exactly the records the frontend needs
+        const totalRecords = processedUsers.length;
+        const totalPages = Math.ceil(totalRecords / limit) || 1;
+        const startIndex = (page - 1) * limit;
+        const paginatedData = processedUsers.slice(startIndex, startIndex + Number(limit));
+
+        // Return the new structured payload
+        return successResponse(res, {
+            users: paginatedData,
+            totalRecords,
+            totalPages
+        }, "Users retrieved");
+        
     } catch (err) {
+        console.error("Get Users Error:", err);
         return errorResponse(res, "Failed to fetch users", 500);
     } finally {
-        client.unbind();
+        try { client.unbind(); } catch(e) {}
     }
 };
-
 
 
 exports.addUser = async (req, res) => {

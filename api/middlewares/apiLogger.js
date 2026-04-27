@@ -4,7 +4,9 @@ module.exports = (req, res, next) => {
 
   res.send = function (body) {
     const duration = Date.now() - start;
-    console.log(`[API] ${req.method} ${req.originalUrl} | Status: ${res.statusCode} | Time: ${duration}ms`);
+    console.log(
+      `[API] ${req.method} ${req.originalUrl} | Status: ${res.statusCode} | Time: ${duration}ms`,
+    );
     return originalSend(body);
   };
 

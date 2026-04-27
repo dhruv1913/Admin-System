@@ -58,6 +58,9 @@ export default function Admin() {
 
     const [deptSearch, setDeptSearch] = useState('');
 
+    const [totalRecords, setTotalRecords] = useState(0);
+    const [totalPages, setTotalPages] = useState(1);
+
     const initialForm = {
         firstName: "", lastName: "", email: "", secondaryEmail: "",
         mobile: "", uid: "", password: "", department: "", title: "",
@@ -65,7 +68,22 @@ export default function Admin() {
     };
     const [formData, setFormData] = useState(initialForm);
 
-    useEffect(() => { loadAllData(); }, []);
+    useEffect(() => { 
+        loadOUs(); 
+    }, []);
+
+    useEffect(() => {
+        loadUsers();
+    }, [currentPage, rowsPerPage, globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter]);
+
+    const loadOUs = async () => {
+        try {
+            const ouRes = await getOUs();
+            setOus(ouRes.data.map(name => ({ label: name, value: name })));
+        } catch (err) {
+            console.error("Failed to load OUs", err);
+        }
+    };
 
     const showToast = (message, type = 'success') => {
         setNotification({ message, type });
@@ -78,18 +96,24 @@ export default function Admin() {
             setOus(ouRes.data.map(name => ({ label: name, value: name })));
 
             const userRes = await getAllUsers();
-            const processed = userRes.data.map(u => ({
+            
+            // 🚨 SAFE EXTRACT: Handle both the old array format and the new pagination format!
+            const rawUsers = Array.isArray(userRes.data) ? userRes.data : (userRes.data.users || []);
+
+            const processed = rawUsers.map(u => ({
                 ...u,
-                status: (Array.isArray(u.employeeType) ? u.employeeType[0] : u.employeeType || "ACTIVE").toUpperCase(),
-                role: (Array.isArray(u.businessCategory) ? u.businessCategory[0] : u.businessCategory || "USER").toUpperCase(),
-                cn: Array.isArray(u.cn) ? u.cn[0] : u.cn,
-                uid: Array.isArray(u.uid) ? u.uid[0] : u.uid,
-                email: Array.isArray(u.mail) ? u.mail[0] : u.mail,
+                status: String(Array.isArray(u.employeeType) ? u.employeeType[0] : u.employeeType || "ACTIVE").toUpperCase(),
+                role: String(Array.isArray(u.businessCategory) ? u.businessCategory[0] : u.businessCategory || "USER").toUpperCase(),
+                cn: String(Array.isArray(u.cn) ? u.cn[0] : u.cn || ""),
+                uid: String(Array.isArray(u.uid) ? u.uid[0] : u.uid || ""),
+                email: String(Array.isArray(u.mail) ? u.mail[0] : u.mail || ""),
+                mobile: String(Array.isArray(u.mobile) ? u.mobile[0] : u.mobile || ""),
                 department: u.department || "General",
                 createTimestamp: u.createTimestamp || "00000000000000Z",
-                secondaryEmail: Array.isArray(u.description) ? u.description[0] : (u.description || ""),
-                labeledURI: Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || ""),
+                secondaryEmail: String(Array.isArray(u.description) ? u.description[0] : (u.description || "")),
+                labeledURI: String(Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || "")),
             }));
+            
             processed.sort((a, b) => (a.createTimestamp < b.createTimestamp ? 1 : -1));
             setUsers(processed);
         } catch (err) {
@@ -100,39 +124,67 @@ export default function Admin() {
         }
     };
 
-   const getFilteredUsers = () => {
-        let filtered = users.filter(u => {
-            if (selectedDeptFilter && selectedDeptFilter.length > 0 && !selectedDeptFilter.includes(u.department)) return false;
-            if (selectedRoleFilter && u.role !== selectedRoleFilter) return false;
-            if (selectedStatusFilter && u.status !== selectedStatusFilter) return false;
-            return true;
-        });
+    const loadUsers = async () => {
+        setLoading(true);
+        try {
+            const params = {
+                page: currentPage,
+                limit: rowsPerPage,
+                search: globalFilter,
+                dept: selectedDeptFilter.join(','),
+                role: selectedRoleFilter,
+                status: selectedStatusFilter
+            };
+            const userRes = await getAllUsers(params);
+            
+            // 🚨 THE FIX: Safely extract the payload whether it's wrapped in .data or not!
+            const payload = userRes.data?.data || userRes.data || {};
+            
+            // Defensively fallback to empty arrays so React NEVER crashes
+            setUsers(payload.users || []);
+            setTotalRecords(payload.totalRecords || 0);
+            setTotalPages(payload.totalPages || 1);
 
-        if (globalFilter) {
-            const q = globalFilter.toLowerCase();
-            filtered = filtered.filter(u =>
-                // 🚨 THE FIX: Wrapped every variable in String() so Numbers don't crash React!
-                (u.cn && String(u.cn).toLowerCase().includes(q)) ||
-                (u.firstName && String(u.firstName).toLowerCase().includes(q)) ||
-                (u.lastName && String(u.lastName).toLowerCase().includes(q)) ||
-                (u.uid && String(u.uid).toLowerCase().includes(q)) ||
-                (u.email && String(u.email).toLowerCase().includes(q)) ||
-                (u.department && String(u.department).toLowerCase().includes(q)) ||
-                (u.mobile && String(u.mobile).toLowerCase().includes(q)) || 
-                (u.secondaryEmail && String(u.secondaryEmail).toLowerCase().includes(q)) 
-            );
+        } catch (err) {
+            console.error("Load failed", err);
+            showToast("Failed to load user data", "error");
+            setUsers([]); // Fallback to empty table on error
+            setTotalRecords(0);
+        } finally {
+            setLoading(false);
         }
-        return filtered;
     };
 
-    const filteredData = getFilteredUsers();
-    const totalRecords = filteredData.length;
-    const paginatedData = filteredData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
-    const totalPages = Math.ceil(totalRecords / rowsPerPage);
+//    const getFilteredUsers = () => {
+//         let filtered = users.filter(u => {
+//             if (selectedDeptFilter && selectedDeptFilter.length > 0 && !selectedDeptFilter.includes(u.department)) return false;
+//             if (selectedRoleFilter && u.role !== selectedRoleFilter) return false;
+//             if (selectedStatusFilter && u.status !== selectedStatusFilter) return false;
+//             return true;
+//         });
 
-    useEffect(() => {
-        setCurrentPage(1);
-    }, [globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter, rowsPerPage]);
+//         if (globalFilter) {
+//             const q = String(globalFilter).toLowerCase();
+//             filtered = filtered.filter(u =>
+//                 // 🚨 THE FIX: Wrapping everything in String() stops React from crashing!
+//                 (u.cn && String(u.cn).toLowerCase().includes(q)) ||
+//                 (u.firstName && String(u.firstName).toLowerCase().includes(q)) ||
+//                 (u.lastName && String(u.lastName).toLowerCase().includes(q)) ||
+//                 (u.uid && String(u.uid).toLowerCase().includes(q)) ||
+//                 (u.email && String(u.email).toLowerCase().includes(q)) ||
+//                 (u.department && String(u.department).toLowerCase().includes(q)) ||
+//                 (u.mobile && String(u.mobile).toLowerCase().includes(q)) || 
+//                 (u.secondaryEmail && String(u.secondaryEmail).toLowerCase().includes(q))
+//             );
+//         }
+//         return filtered;
+//     };
+
+    // const filteredData = getFilteredUsers();
+    // const totalRecords = filteredData.length;
+    // const paginatedData = filteredData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+    // const totalPages = Math.ceil(totalRecords / rowsPerPage);
+
 
   const handleToggle = async (user) => {
         if (!hasWriteAccess) return;
@@ -592,7 +644,8 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                            ) : paginatedData.length === 0 ? (
+                            // 🚨 CHANGED TO users.length
+                            ) : users.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="px-4 py-20 text-center">
                                         <div className="flex flex-col items-center gap-2">
@@ -607,7 +660,8 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                            ) : paginatedData.map((user) => (
+                            // 🚨 CHANGED TO users.map
+                            ) : users.map((user) => (
                                 <tr key={user.uid} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors group">
                                     <td className="px-4 py-4">
                                         <span className="inline-block text-indigo-600 dark:text-indigo-400 font-bold text-sm bg-indigo-50 dark:bg-indigo-900/30 px-3 py-1 rounded uppercase tracking-wider">
