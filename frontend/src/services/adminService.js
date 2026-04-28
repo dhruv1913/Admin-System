@@ -13,3 +13,5 @@ export const deleteUser = (uid) => apiClient.delete(`/directory/delete/${uid}`);
 export const exportUsers = () => apiClient.get("/directory/export", { responseType: 'blob' });
 export const getOUs = () => apiClient.get("/directory/ous");
 export const getUsersByOU = (ou) => apiClient.get(`/directory/users/${ou}`);
+
+export const getDeptStats = () => apiClient.get("/directory/ous-stats");

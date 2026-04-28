@@ -15,6 +15,9 @@ import UserFormDialog from "../../components/UserFormDialog";
 import Modal from "../../components/ui/Modal";
 import Toast from "../../components/ui/Toast";
 
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { getDeptStats } from "../services/adminService";
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 export default function Admin() {
@@ -58,6 +61,8 @@ export default function Admin() {
 
     const [deptSearch, setDeptSearch] = useState('');
 
+    const [deptStats, setDeptStats] = useState([]);
+
     const [totalRecords, setTotalRecords] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
 
@@ -70,11 +75,21 @@ export default function Admin() {
 
     useEffect(() => { 
         loadOUs(); 
+        loadStats(); 
     }, []);
 
     useEffect(() => {
         loadUsers();
     }, [currentPage, rowsPerPage, globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter]);
+
+    const loadStats = async () => {
+        try {
+            const res = await getDeptStats();
+            setDeptStats(res.data?.data || res.data || []);
+        } catch (err) {
+            console.error("Failed to load stats", err);
+        }
+    };
 
     const loadOUs = async () => {
         try {
@@ -417,7 +432,6 @@ export default function Admin() {
                     </button>
                    {showDeptDropdown && (
                         <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-xl max-h-60 overflow-y-auto p-2 animate-in zoom-in-95 duration-200">
-                            {/* 🚨 NEW: Search Input inside Dropdown */}
                             <div className="mb-2 p-1">
                                 <input
                                     type="text"
@@ -427,18 +441,23 @@ export default function Admin() {
                                     className="w-full px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-indigo-500 bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300"
                                 />
                             </div>
-                            <div className="p-2 border-b border-gray-50 dark:border-gray-700 mb-1">
-                                <button
-                                    onClick={() => setSelectedDeptFilter([])}
-                                    className="text-[10px] uppercase font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
-                                >
-                                    Clear Selection
-                                </button>
-                            </div>
-                            {/* 🚨 NEW: Filters the OUs based on the search box */}
-                            {ous.filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase())).map(ou => (
+                            
+                            {/* 🚨 THE FIX: Smart Sorting and DOM Rendering Limit */}
+                            {ous
+                                .filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase()))
+                                .sort((a, b) => {
+                                    // 1. Force selected items to always float to the top of the list!
+                                    const aSelected = selectedDeptFilter.includes(a.value);
+                                    const bSelected = selectedDeptFilter.includes(b.value);
+                                    if (aSelected && !bSelected) return -1;
+                                    if (!aSelected && bSelected) return 1;
+                                    // 2. Otherwise, sort alphabetically
+                                    return a.label.localeCompare(b.label);
+                                })
+                                .slice(0, 50) // 🚨 Only render top 50 matches to prevent browser lag!
+                                .map(ou => (
                                 <label key={ou.value} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg cursor-pointer transition-colors">
-                                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${selectedDeptFilter.includes(ou.value) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'
+                                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors shrink-0 ${selectedDeptFilter.includes(ou.value) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'
                                         }`}>
                                         {selectedDeptFilter.includes(ou.value) && <Check size={10} />}
                                     </div>
@@ -448,9 +467,15 @@ export default function Admin() {
                                         checked={selectedDeptFilter.includes(ou.value)}
                                         onChange={() => toggleDeptFilter(ou.value)}
                                     />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300">{ou.label}</span>
+                                    <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{ou.label}</span>
                                 </label>
                             ))}
+                            
+                            {ous.length > 50 && deptSearch === '' && (
+                                <p className="text-xs text-center text-gray-400 mt-2 pt-2 border-t border-gray-100">
+                                    Use search to find more departments...
+                                </p>
+                            )}
                         </div>
                     )}
                 </div>
@@ -478,8 +503,123 @@ export default function Admin() {
                     <option value="INACTIVE">Inactive Only</option>
                 </select>
             </div>
+            {/* 🚨 NEW: Active Filter Chips UI */}
+            {selectedDeptFilter.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 mt-4 animate-in fade-in slide-in-from-top-2">
+                    <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mr-1">Filtered By:</span>
+                    {selectedDeptFilter.map(dept => (
+                        <span key={dept} className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-800 rounded-full text-xs font-bold transition-all hover:bg-indigo-100">
+                            {dept}
+                            <button 
+                                onClick={() => toggleDeptFilter(dept)} 
+                                className="hover:bg-indigo-200 dark:hover:bg-indigo-800 rounded-full p-0.5 transition-colors"
+                            >
+                                <X size={12} />
+                            </button>
+                        </span>
+                    ))}
+                    <button 
+                        onClick={() => setSelectedDeptFilter([])} 
+                        className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors ml-2"
+                    >
+                        Clear All
+                    </button>
+                </div>
+            )}
         </div>
+        
     );
+
+    const renderCharts = () => {
+        if (!deptStats || deptStats.length === 0) return null;
+
+        // 🚨 1. PARETO SORTING: Sort departments by headcount (largest first)
+        let sortedDepts = [...deptStats].sort((a, b) => b.total - a.total);
+
+        // 🚨 2. SMART GROUPING: If more than 10 OUs, group the rest into "Other Depts"
+        let barChartData = sortedDepts;
+        if (sortedDepts.length > 10) {
+            const top10 = sortedDepts.slice(0, 10);
+            const others = sortedDepts.slice(10).reduce((acc, curr) => ({
+                name: 'Other Depts',
+                total: acc.total + curr.total,
+                active: acc.active + curr.active,
+                inactive: acc.inactive + curr.inactive
+            }), { name: 'Other Depts', total: 0, active: 0, inactive: 0 });
+            
+            barChartData = [...top10, others];
+        }
+
+        // Calculate totals for the Donut Chart
+        const totalActive = deptStats.reduce((acc, curr) => acc + curr.active, 0);
+        const totalInactive = deptStats.reduce((acc, curr) => acc + curr.inactive, 0);
+        const pieData = [
+            { name: 'Active', value: totalActive, color: '#10B981' }, 
+            { name: 'Inactive', value: totalInactive, color: '#EF4444' } 
+        ];
+
+        // Determine if we need to slant the labels based on how many bars there are
+        const needsSlant = barChartData.length > 5;
+
+        return (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4 px-4 pt-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {/* BAR CHART: Users per Department */}
+                <div className="lg:col-span-2 bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                            Headcount by Department
+                        </h3>
+                        {sortedDepts.length > 10 && (
+                            <span className="text-[10px] font-bold text-indigo-500 bg-indigo-50 dark:bg-indigo-900/30 px-2 py-1 rounded-md">
+                                Showing Top 10
+                            </span>
+                        )}
+                    </div>
+                    <div className="h-56"> {/* Slightly taller to accommodate slanted text */}
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={barChartData} margin={{ top: 10, right: 10, left: -20, bottom: needsSlant ? 25 : 0 }}>
+                                <XAxis 
+                                    dataKey="name" 
+                                    tick={{fontSize: 11, fill: '#6B7280'}} 
+                                    axisLine={false} 
+                                    tickLine={false}
+                                    interval={0} // 🚨 Forces all labels to show
+                                    angle={needsSlant ? -35 : 0} // 🚨 Slants text if there are lots of OUs
+                                    textAnchor={needsSlant ? "end" : "middle"}
+                                />
+                                <YAxis tick={{fontSize: 11, fill: '#6B7280'}} axisLine={false} tickLine={false} allowDecimals={false} />
+                                <Tooltip 
+                                    cursor={{fill: 'rgba(79, 70, 229, 0.05)'}}
+                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', fontSize: '12px', fontWeight: 'bold' }}
+                                />
+                                {/* 🚨 maxBarSize prevents bars from becoming giant blocks if there are only 2 OUs */}
+                                <Bar dataKey="total" fill="#4F46E5" radius={[4, 4, 0, 0]} maxBarSize={45} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+
+                {/* DONUT CHART: Account Status */}
+                <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
+                    <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">Overall Status</h3>
+                    <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                                <Pie 
+                                    data={pieData} dataKey="value" nameKey="name" 
+                                    cx="50%" cy="45%" innerRadius={55} outerRadius={75} paddingAngle={5}
+                                >
+                                    {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />)}
+                                </Pie>
+                                <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', fontSize: '12px', fontWeight: 'bold' }} />
+                                <Legend verticalAlign="bottom" height={20} iconType="circle" wrapperStyle={{ fontSize: '12px', fontWeight: 'bold' }} />
+                            </PieChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+            </div>
+        );
+    };
 
     const renderPagination = () => {
         const totalEntries = totalRecords;
@@ -622,6 +762,7 @@ export default function Admin() {
 
             <div className="bg-white dark:bg-gray-800 shadow-xl rounded-2xl overflow-hidden border border-gray-100 dark:border-gray-700">
                 {renderHeader()}
+                {renderCharts()}
 
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
