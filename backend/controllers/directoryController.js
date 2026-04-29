@@ -797,6 +797,69 @@ exports.deleteDepartment = async (req, res) => {
     }
 };
 
+exports.bulkDelete = async (req, res) => {
+    const { uids } = req.body;
+    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
+
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
+        return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    const client = createClient();
+    let deleted = 0;
+    try {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        for (const uid of uids) {
+            try {
+                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
+                if (searchRes.length > 0) {
+                    await new Promise((resolve, reject) => client.del(searchRes[0].dn, (err) => err ? reject(err) : resolve()));
+                    await dbService.deleteUserMapping(uid);
+                    deleted++;
+                }
+            } catch(e) { console.error(`Failed to delete ${uid}`, e); }
+        }
+        await logAction(req, "BULK_DELETE", req.user?.uid || "Admin", "ACTIVE", `Bulk deleted ${deleted} users`);
+        return successResponse(res, null, `Successfully deleted ${deleted} users`);
+    } catch (err) {
+        return res.status(500).json({ message: "Bulk delete failed" });
+    } finally { try { client.unbind(); } catch (e) {} }
+};
+
+exports.bulkSuspend = async (req, res) => {
+    const { uids } = req.body;
+    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
+
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
+        return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    const client = createClient();
+    let suspended = 0;
+    try {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        for (const uid of uids) {
+            try {
+                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
+                if (searchRes.length > 0) {
+                    const userDN = searchRes[0].dn;
+                    await dbService.updateUserStatus(uid, false); 
+                    
+                    await new Promise((resolve, reject) => {
+                        const change = new ldap.Change({ operation: 'replace', modification: { type: 'employeeType', values: ['INACTIVE'] } });
+                        client.modify(userDN, change, (err) => err ? reject(err) : resolve());
+                    });
+                    suspended++;
+                }
+            } catch(e) { console.error(`Failed to suspend ${uid}`, e); }
+        }
+        await logAction(req, "BULK_SUSPEND", req.user?.uid || "Admin", "INACTIVE", `Bulk suspended ${suspended} users`);
+        return successResponse(res, null, `Successfully suspended ${suspended} users`);
+    } catch (err) {
+        return res.status(500).json({ message: "Bulk suspend failed" });
+    } finally { try { client.unbind(); } catch (e) {} }
+};
+
 exports.getSessionLogs = async (req, res) => {
     try { const logs = await getSessionLogs(); return successResponse(res, logs); }
     catch (err) { return errorResponse(res, "Error fetching session logs"); }

@@ -5,7 +5,7 @@ import {
     Eye, Pencil, Trash2, Plus, GitBranch, Settings, Upload, Download,
     Check, AlertCircle, X, ChevronDown, User, MoreVertical
 } from "lucide-react";
-import { getAllUsers, getOUs, addUser, editUser, deleteUser, bulkImport, exportUsers } from "../services/adminService";
+import { getAllUsers, getOUs, addUser, editUser, deleteUser, bulkImport, exportUsers, bulkDeleteUsers, bulkSuspendUsers } from "../services/adminService";
 import { securePayload } from "../utils/encryption";
 import { useAuth } from "../context/AuthContext";
 
@@ -66,6 +66,8 @@ export default function Admin() {
     const [totalRecords, setTotalRecords] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
 
+    const [selectedUsers, setSelectedUsers] = useState([]);
+
     const initialForm = {
         firstName: "", lastName: "", email: "", secondaryEmail: "",
         mobile: "", uid: "", password: "", department: "", title: "",
@@ -78,9 +80,15 @@ export default function Admin() {
         loadStats(); 
     }, []);
 
+    // 2. 🚨 THE MISSING PIECE: This tells the table to fetch users!
     useEffect(() => {
         loadUsers();
     }, [currentPage, rowsPerPage, globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter]);
+
+    // 3. Clear all selected checkboxes if the admin searches or changes pages
+    useEffect(() => {
+        setSelectedUsers([]);
+    }, [currentPage, globalFilter, selectedDeptFilter, selectedRoleFilter, selectedStatusFilter]);
 
     const loadStats = async () => {
         try {
@@ -88,6 +96,63 @@ export default function Admin() {
             setDeptStats(res.data?.data || res.data || []);
         } catch (err) {
             console.error("Failed to load stats", err);
+        }
+    };
+
+    const handleSelectAll = (e) => {
+        if (e.target.checked) {
+            // Select all users currently visible on the page
+            setSelectedUsers(users.map(u => u.uid));
+        } else {
+            setSelectedUsers([]);
+        }
+    };
+
+    const handleSelectOne = (uid) => {
+        setSelectedUsers(prev => 
+            prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]
+        );
+    };
+
+    const handleBulkSuspend = async () => {
+        if (!window.confirm(`Are you sure you want to suspend ${selectedUsers.length} users?`)) return;
+        setLoading(true);
+        try {
+            // 🚨 FIX 1: Added 'await' and destructured { payload }
+            const { payload } = await securePayload({ uids: selectedUsers });
+            
+            // 🚨 FIX 2: Wrapped payload in an object so the backend decrypts it properly
+            await bulkSuspendUsers({ payload });
+            
+            showToast(`Successfully suspended ${selectedUsers.length} users`, "success");
+            setSelectedUsers([]);
+            loadUsers();
+            loadStats();
+        } catch (error) {
+            console.error("Bulk Suspend Error:", error);
+            showToast("Failed to suspend users", "error");
+            setLoading(false);
+        }
+    };
+
+    const handleBulkDelete = async () => {
+        if (!window.confirm(`Are you sure you want to PERMANENTLY delete ${selectedUsers.length} users?`)) return;
+        setLoading(true);
+        try {
+            // 🚨 FIX 1: Added 'await' and destructured { payload }
+            const { payload } = await securePayload({ uids: selectedUsers });
+            
+            // 🚨 FIX 2: Wrapped payload in an object so the backend decrypts it properly
+            await bulkDeleteUsers({ payload });
+            
+            showToast(`Successfully deleted ${selectedUsers.length} users`, "success");
+            setSelectedUsers([]);
+            loadUsers();
+            loadStats();
+        } catch (error) {
+            console.error("Bulk Delete Error:", error);
+            showToast("Failed to delete users", "error");
+            setLoading(false);
         }
     };
 
@@ -169,37 +234,6 @@ export default function Admin() {
             setLoading(false);
         }
     };
-
-//    const getFilteredUsers = () => {
-//         let filtered = users.filter(u => {
-//             if (selectedDeptFilter && selectedDeptFilter.length > 0 && !selectedDeptFilter.includes(u.department)) return false;
-//             if (selectedRoleFilter && u.role !== selectedRoleFilter) return false;
-//             if (selectedStatusFilter && u.status !== selectedStatusFilter) return false;
-//             return true;
-//         });
-
-//         if (globalFilter) {
-//             const q = String(globalFilter).toLowerCase();
-//             filtered = filtered.filter(u =>
-//                 // 🚨 THE FIX: Wrapping everything in String() stops React from crashing!
-//                 (u.cn && String(u.cn).toLowerCase().includes(q)) ||
-//                 (u.firstName && String(u.firstName).toLowerCase().includes(q)) ||
-//                 (u.lastName && String(u.lastName).toLowerCase().includes(q)) ||
-//                 (u.uid && String(u.uid).toLowerCase().includes(q)) ||
-//                 (u.email && String(u.email).toLowerCase().includes(q)) ||
-//                 (u.department && String(u.department).toLowerCase().includes(q)) ||
-//                 (u.mobile && String(u.mobile).toLowerCase().includes(q)) || 
-//                 (u.secondaryEmail && String(u.secondaryEmail).toLowerCase().includes(q))
-//             );
-//         }
-//         return filtered;
-//     };
-
-    // const filteredData = getFilteredUsers();
-    // const totalRecords = filteredData.length;
-    // const paginatedData = filteredData.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
-    // const totalPages = Math.ceil(totalRecords / rowsPerPage);
-
 
   const handleToggle = async (user) => {
         if (!hasWriteAccess) return;
@@ -764,6 +798,34 @@ export default function Admin() {
                 {renderHeader()}
                 {renderCharts()}
 
+                {/* 🚨 BULK ACTIONS TOOLBAR */}
+                {selectedUsers.length > 0 && (
+                    <div className="bg-indigo-50 dark:bg-indigo-900/30 border-y border-indigo-100 dark:border-indigo-800 px-6 py-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-center gap-3">
+                            <span className="bg-indigo-600 text-white text-xs font-bold px-2 py-1 rounded-md">
+                                {selectedUsers.length} Selected
+                            </span>
+                            <span className="text-sm font-medium text-indigo-900 dark:text-indigo-300">
+                                Apply action to selected users:
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button 
+                                onClick={handleBulkSuspend}
+                                className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                            >
+                                <AlertCircle size={14} /> Suspend Selected
+                            </button>
+                            <button 
+                                onClick={handleBulkDelete}
+                                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                            >
+                                <Trash2 size={14} /> Delete Selected
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
@@ -773,6 +835,14 @@ export default function Admin() {
                                 <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Access Role</th>
                                 <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Account Status</th>
                                 <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-right">Actions</th>
+                                <th className="px-6 py-4 w-12">
+                                    <input 
+                                        type="checkbox" 
+                                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                        checked={users.length > 0 && selectedUsers.length === users.length}
+                                        onChange={handleSelectAll}
+                                    />
+                                </th>           
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -785,6 +855,7 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
+                                
                             // 🚨 CHANGED TO users.length
                             ) : users.length === 0 ? (
                                 <tr>
@@ -803,7 +874,15 @@ export default function Admin() {
                                 </tr>
                             // 🚨 CHANGED TO users.map
                             ) : users.map((user) => (
-                                <tr key={user.uid} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/30 transition-colors group">
+                                <tr key={user.uid} className={`transition-colors group ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
+                                    <td className="px-6 py-4">
+                                        <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                            checked={selectedUsers.includes(user.uid)}
+                                            onChange={() => handleSelectOne(user.uid)}
+                                        />
+                                    </td>
                                     <td className="px-4 py-4">
                                         <span className="inline-block text-indigo-600 dark:text-indigo-400 font-bold text-sm bg-indigo-50 dark:bg-indigo-900/30 px-3 py-1 rounded uppercase tracking-wider">
                                             {user.department}

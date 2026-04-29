@@ -17,6 +17,10 @@ router.put('/edit', photoUpload.single('photo'), decryptPayload, dirController.e
 
 router.delete('/delete/:uid', dirController.deleteUser);
 router.post('/bulk', uploadMemory.single('file'), dirController.bulkImport);
+
+router.post('/bulk-delete', decryptPayload, dirController.bulkDelete);
+router.post('/bulk-suspend', decryptPayload, dirController.bulkSuspend);
+
 router.get('/export', dirController.exportUsers);
 
 router.get('/ous', dirController.getOUs);

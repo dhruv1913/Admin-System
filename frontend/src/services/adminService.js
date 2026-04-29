@@ -14,4 +14,7 @@ export const exportUsers = () => apiClient.get("/directory/export", { responseTy
 export const getOUs = () => apiClient.get("/directory/ous");
 export const getUsersByOU = (ou) => apiClient.get(`/directory/users/${ou}`);
 
+export const bulkDeleteUsers = (data) => apiClient.post("/directory/bulk-delete", data);
+export const bulkSuspendUsers = (data) => apiClient.post("/directory/bulk-suspend", data);
+
 export const getDeptStats = () => apiClient.get("/directory/ous-stats");

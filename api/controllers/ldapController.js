@@ -760,7 +760,7 @@ if (shouldValidateCaptcha) {
        8️⃣ FETCH LDAP SETTINGS
     ============================== */
     const settings = await ServiceLdapSetting.findOne({
-      where: { service_id: 3 }, 
+      where: { service_id: service.id },
     });
 
     if (!settings) {
@@ -769,9 +769,6 @@ if (shouldValidateCaptcha) {
         404
       );
     }
-
-     // 🚨 Remove the OU restriction so it searches the entire directory
-      
 
     /* ==============================
        9️⃣ CHECK USER IN LDAP
