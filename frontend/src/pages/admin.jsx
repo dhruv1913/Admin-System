@@ -75,9 +75,9 @@ export default function Admin() {
     };
     const [formData, setFormData] = useState(initialForm);
 
-    useEffect(() => { 
-        loadOUs(); 
-        loadStats(); 
+    useEffect(() => {
+        loadOUs();
+        loadStats();
     }, []);
 
     // 2. 🚨 THE MISSING PIECE: This tells the table to fetch users!
@@ -109,7 +109,7 @@ export default function Admin() {
     };
 
     const handleSelectOne = (uid) => {
-        setSelectedUsers(prev => 
+        setSelectedUsers(prev =>
             prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]
         );
     };
@@ -120,10 +120,10 @@ export default function Admin() {
         try {
             // 🚨 FIX 1: Added 'await' and destructured { payload }
             const { payload } = await securePayload({ uids: selectedUsers });
-            
+
             // 🚨 FIX 2: Wrapped payload in an object so the backend decrypts it properly
             await bulkSuspendUsers({ payload });
-            
+
             showToast(`Successfully suspended ${selectedUsers.length} users`, "success");
             setSelectedUsers([]);
             loadUsers();
@@ -141,10 +141,10 @@ export default function Admin() {
         try {
             // 🚨 FIX 1: Added 'await' and destructured { payload }
             const { payload } = await securePayload({ uids: selectedUsers });
-            
+
             // 🚨 FIX 2: Wrapped payload in an object so the backend decrypts it properly
             await bulkDeleteUsers({ payload });
-            
+
             showToast(`Successfully deleted ${selectedUsers.length} users`, "success");
             setSelectedUsers([]);
             loadUsers();
@@ -176,7 +176,7 @@ export default function Admin() {
             setOus(ouRes.data.map(name => ({ label: name, value: name })));
 
             const userRes = await getAllUsers();
-            
+
             // 🚨 SAFE EXTRACT: Handle both the old array format and the new pagination format!
             const rawUsers = Array.isArray(userRes.data) ? userRes.data : (userRes.data.users || []);
 
@@ -193,7 +193,7 @@ export default function Admin() {
                 secondaryEmail: String(Array.isArray(u.description) ? u.description[0] : (u.description || "")),
                 labeledURI: String(Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || "")),
             }));
-            
+
             processed.sort((a, b) => (a.createTimestamp < b.createTimestamp ? 1 : -1));
             setUsers(processed);
         } catch (err) {
@@ -216,10 +216,10 @@ export default function Admin() {
                 status: selectedStatusFilter
             };
             const userRes = await getAllUsers(params);
-            
+
             // 🚨 THE FIX: Safely extract the payload whether it's wrapped in .data or not!
             const payload = userRes.data?.data || userRes.data || {};
-            
+
             // Defensively fallback to empty arrays so React NEVER crashes
             setUsers(payload.users || []);
             setTotalRecords(payload.totalRecords || 0);
@@ -235,7 +235,7 @@ export default function Admin() {
         }
     };
 
-  const handleToggle = async (user) => {
+    const handleToggle = async (user) => {
         if (!hasWriteAccess) return;
         const currentStatus = user.status;
         const newStatus = currentStatus === "ACTIVE" ? "INACTIVE" : "ACTIVE";
@@ -243,15 +243,15 @@ export default function Admin() {
         setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, status: newStatus } : u));
         try {
             const data = new FormData();
-            
+
             // Destructure ONLY the payload
-            const { payload } = await securePayload({ 
-                uid: user.uid, 
-                employeeType: newStatus, 
-                role: user.role, 
-                email: user.email 
+            const { payload } = await securePayload({
+                uid: user.uid,
+                employeeType: newStatus,
+                role: user.role,
+                email: user.email
             });
-            
+
             data.append("payload", payload);
 
             await editUser(data);
@@ -287,7 +287,7 @@ export default function Admin() {
         setProductDialog(true);
     };
 
-  const handleSubmit = async (e) => {
+    const handleSubmit = async (e) => {
         e.preventDefault();
 
         try {
@@ -407,7 +407,7 @@ export default function Admin() {
                             >
                                 <Plus size={18} /> Add User
                             </button>
-                            
+
 
                             <div className="relative">
                                 <button
@@ -464,7 +464,7 @@ export default function Admin() {
                         </span>
                         <ChevronDown size={16} className="text-gray-400" />
                     </button>
-                   {showDeptDropdown && (
+                    {showDeptDropdown && (
                         <div className="absolute z-20 w-full mt-2 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl shadow-xl max-h-60 overflow-y-auto p-2 animate-in zoom-in-95 duration-200">
                             <div className="mb-2 p-1">
                                 <input
@@ -475,7 +475,7 @@ export default function Admin() {
                                     className="w-full px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg outline-none focus:border-indigo-500 bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300"
                                 />
                             </div>
-                            
+
                             {/* 🚨 THE FIX: Smart Sorting and DOM Rendering Limit */}
                             {ous
                                 .filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase()))
@@ -490,21 +490,21 @@ export default function Admin() {
                                 })
                                 .slice(0, 50) // 🚨 Only render top 50 matches to prevent browser lag!
                                 .map(ou => (
-                                <label key={ou.value} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg cursor-pointer transition-colors">
-                                    <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors shrink-0 ${selectedDeptFilter.includes(ou.value) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'
-                                        }`}>
-                                        {selectedDeptFilter.includes(ou.value) && <Check size={10} />}
-                                    </div>
-                                    <input
-                                        type="checkbox"
-                                        className="hidden"
-                                        checked={selectedDeptFilter.includes(ou.value)}
-                                        onChange={() => toggleDeptFilter(ou.value)}
-                                    />
-                                    <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{ou.label}</span>
-                                </label>
-                            ))}
-                            
+                                    <label key={ou.value} className="flex items-center gap-3 p-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 rounded-lg cursor-pointer transition-colors">
+                                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors shrink-0 ${selectedDeptFilter.includes(ou.value) ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-gray-300 dark:border-gray-600'
+                                            }`}>
+                                            {selectedDeptFilter.includes(ou.value) && <Check size={10} />}
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="hidden"
+                                            checked={selectedDeptFilter.includes(ou.value)}
+                                            onChange={() => toggleDeptFilter(ou.value)}
+                                        />
+                                        <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{ou.label}</span>
+                                    </label>
+                                ))}
+
                             {ous.length > 50 && deptSearch === '' && (
                                 <p className="text-xs text-center text-gray-400 mt-2 pt-2 border-t border-gray-100">
                                     Use search to find more departments...
@@ -544,16 +544,16 @@ export default function Admin() {
                     {selectedDeptFilter.map(dept => (
                         <span key={dept} className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 border border-indigo-100 dark:border-indigo-800 rounded-full text-xs font-bold transition-all hover:bg-indigo-100">
                             {dept}
-                            <button 
-                                onClick={() => toggleDeptFilter(dept)} 
+                            <button
+                                onClick={() => toggleDeptFilter(dept)}
                                 className="hover:bg-indigo-200 dark:hover:bg-indigo-800 rounded-full p-0.5 transition-colors"
                             >
                                 <X size={12} />
                             </button>
                         </span>
                     ))}
-                    <button 
-                        onClick={() => setSelectedDeptFilter([])} 
+                    <button
+                        onClick={() => setSelectedDeptFilter([])}
                         className="text-xs font-bold text-gray-400 hover:text-red-500 transition-colors ml-2"
                     >
                         Clear All
@@ -561,7 +561,7 @@ export default function Admin() {
                 </div>
             )}
         </div>
-        
+
     );
 
     const renderCharts = () => {
@@ -570,8 +570,8 @@ export default function Admin() {
         // 🚨 THE FIX: Filter the stats based on the selected departments dropdown!
         let filteredStats = deptStats;
         if (selectedDeptFilter.length > 0) {
-            filteredStats = deptStats.filter(stat => 
-                selectedDeptFilter.some(selected => 
+            filteredStats = deptStats.filter(stat =>
+                selectedDeptFilter.some(selected =>
                     String(selected).toLowerCase() === String(stat.name).toLowerCase()
                 )
             );
@@ -593,7 +593,7 @@ export default function Admin() {
                 active: acc.active + curr.active,
                 inactive: acc.inactive + curr.inactive
             }), { name: 'Other Depts', total: 0, active: 0, inactive: 0 });
-            
+
             barChartData = [...top10, others];
         }
 
@@ -601,8 +601,8 @@ export default function Admin() {
         const totalActive = filteredStats.reduce((acc, curr) => acc + curr.active, 0);
         const totalInactive = filteredStats.reduce((acc, curr) => acc + curr.inactive, 0);
         const pieData = [
-            { name: 'Active', value: totalActive, color: '#10B981' }, 
-            { name: 'Inactive', value: totalInactive, color: '#EF4444' } 
+            { name: 'Active', value: totalActive, color: '#10B981' },
+            { name: 'Inactive', value: totalInactive, color: '#EF4444' }
         ];
 
         const needsSlant = barChartData.length > 5;
@@ -624,18 +624,18 @@ export default function Admin() {
                     <div className="h-56"> {/* Slightly taller to accommodate slanted text */}
                         <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={barChartData} margin={{ top: 10, right: 10, left: -20, bottom: needsSlant ? 25 : 0 }}>
-                                <XAxis 
-                                    dataKey="name" 
-                                    tick={{fontSize: 11, fill: '#6B7280'}} 
-                                    axisLine={false} 
+                                <XAxis
+                                    dataKey="name"
+                                    tick={{ fontSize: 11, fill: '#6B7280' }}
+                                    axisLine={false}
                                     tickLine={false}
                                     interval={0} // 🚨 Forces all labels to show
                                     angle={needsSlant ? -35 : 0} // 🚨 Slants text if there are lots of OUs
                                     textAnchor={needsSlant ? "end" : "middle"}
                                 />
-                                <YAxis tick={{fontSize: 11, fill: '#6B7280'}} axisLine={false} tickLine={false} allowDecimals={false} />
-                                <Tooltip 
-                                    cursor={{fill: 'rgba(79, 70, 229, 0.05)'}}
+                                <YAxis tick={{ fontSize: 11, fill: '#6B7280' }} axisLine={false} tickLine={false} allowDecimals={false} />
+                                <Tooltip
+                                    cursor={{ fill: 'rgba(79, 70, 229, 0.05)' }}
                                     contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', fontSize: '12px', fontWeight: 'bold' }}
                                 />
                                 {/* 🚨 maxBarSize prevents bars from becoming giant blocks if there are only 2 OUs */}
@@ -651,8 +651,8 @@ export default function Admin() {
                     <div className="h-56">
                         <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
-                                <Pie 
-                                    data={pieData} dataKey="value" nameKey="name" 
+                                <Pie
+                                    data={pieData} dataKey="value" nameKey="name"
                                     cx="50%" cy="45%" innerRadius={55} outerRadius={75} paddingAngle={5}
                                 >
                                     {pieData.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} stroke="transparent" />)}
@@ -822,13 +822,13 @@ export default function Admin() {
                             </span>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button 
+                            <button
                                 onClick={handleBulkSuspend}
                                 className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
                                 <AlertCircle size={14} /> Inactive User
                             </button>
-                            <button 
+                            <button
                                 onClick={handleBulkDelete}
                                 className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
@@ -848,13 +848,13 @@ export default function Admin() {
                                 <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Account Status</th>
                                 <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-right">Actions</th>
                                 <th className="px-6 py-4 w-12">
-                                    <input 
-                                        type="checkbox" 
+                                    <input
+                                        type="checkbox"
                                         className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                                         checked={users.length > 0 && selectedUsers.length === users.length}
                                         onChange={handleSelectAll}
                                     />
-                                </th>           
+                                </th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -867,8 +867,8 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                                
-                            // 🚨 CHANGED TO users.length
+
+                                // 🚨 CHANGED TO users.length
                             ) : users.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="px-4 py-20 text-center">
@@ -884,13 +884,13 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                            // 🚨 CHANGED TO users.map
-                            // 🚨 CHANGED TO users.map
+                                // 🚨 CHANGED TO users.map
+                                // 🚨 CHANGED TO users.map
                             ) : users.map((user) => (
                                 <tr key={user.uid} className={`transition-colors ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
                                     <td className="px-6 py-4">
-                                        <input 
-                                            type="checkbox" 
+                                        <input
+                                            type="checkbox"
                                             className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                                             checked={selectedUsers.includes(user.uid)}
                                             onChange={() => handleSelectOne(user.uid)}

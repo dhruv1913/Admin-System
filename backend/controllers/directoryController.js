@@ -161,7 +161,7 @@ exports.addUser = async (req, res) => {
         }
     }
 
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
         if (!req.user.canWrite || !isAllowedOU(req.user.allowedOUs, department)) {
             return res.status(403).json({ message: "Unauthorized" });
         }
@@ -386,7 +386,7 @@ exports.editUser = async (req, res) => {
 exports.deleteUser = async (req, res) => {
     const { uid } = req.params;
 
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
+   if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
         return res.status(403).json({ message: "Unauthorized" });
     }
 
@@ -685,15 +685,26 @@ exports.getOUs = async (req, res) => {
 };
 
 exports.getDepartmentsStats = async (req, res) => {
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") return res.status(403).json({ message: "Unauthorized" });
+    // 🚨 1. ALLOW ADMINS: Updated security lock to allow standard Admins through
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
+        return res.status(403).json({ message: "Unauthorized" });
+    }
 
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        
+        // Fetch all OUs
         const entries = await search(client, getOrgBase(), { scope: "one", filter: "(objectClass=organizationalUnit)", attributes: ["ou"] });
-        const depts = entries.map(e => Array.isArray(e.ou) ? e.ou[0] : e.ou)
+        let depts = entries.map(e => Array.isArray(e.ou) ? e.ou[0] : e.ou)
             .filter(name => name && !['users', 'admins', 'system'].includes(name.toLowerCase()));
 
+        // 🚨 2. RBAC FILTER: If they are a standard Admin, ONLY calculate stats for their assigned departments
+        if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
+            depts = depts.filter(dept => isAllowedOU(req.user.allowedOUs, dept));
+        }
+
+        // Calculate active/inactive users per department
         const stats = [];
         for (const dept of depts) {
             const users = await search(client, `ou=${dept},${getOrgBase()}`, {
@@ -707,15 +718,20 @@ exports.getDepartmentsStats = async (req, res) => {
             });
             stats.push({ name: dept, total: users.length, active: activeCount, inactive: inactiveCount });
         }
+        
         return successResponse(res, stats);
     } catch (err) {
-        res.status(500).json({ message: "Error fetching stats" });
-    } finally { client.unbind(); }
+        console.error("Stats Error:", err);
+        return res.status(500).json({ message: "Error fetching stats" });
+    } finally { 
+        client.unbind(); 
+    }
 };
 
 exports.createDepartment = async (req, res) => {
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
-        return res.status(403).json({ message: "Unauthorized. Only Super Admins can add departments." });
+    // 🚨 FIX: Allow admins to create OUs
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
+        return res.status(403).json({ message: "Unauthorized. Only Admins can add departments." });
     }
 
     // 🚨 SMART CATCH: Grab the name no matter what the frontend called it
@@ -752,7 +768,8 @@ exports.createDepartment = async (req, res) => {
 };
 
 exports.deleteDepartment = async (req, res) => {
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
+    // 🚨 FIX: Allow admins to delete OUs
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
         return res.status(403).json({ message: "Unauthorized" });
     }
 

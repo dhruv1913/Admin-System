@@ -8,6 +8,8 @@ import {
 } from "../services/departmentService";
 import { securePayload } from "../utils/encryption";
 import { useNavigate } from "react-router-dom";
+// 🚨 FIX 1: Import useAuth so we can check the user's role
+import { useAuth } from "../context/AuthContext";
 
 export default function Departments() {
     const [depts, setDepts] = useState([]);
@@ -19,8 +21,13 @@ export default function Departments() {
     const [rowsPerPage, setRowsPerPage] = useState(10);
 
     const navigate = useNavigate();
-
     const [notification, setNotification] = useState(null);
+
+    // 🚨 FIX 2: Grab the auth object from the context
+    const { auth } = useAuth();
+
+    // Now it knows exactly what 'auth' is!
+    const isSuperAdmin = auth?.role === 'SUPER_ADMIN' || auth?.role === 'super_admin';
 
     const showToast = (message, type = 'success') => {
         setNotification({ message, type });
@@ -57,28 +64,23 @@ export default function Departments() {
 
     const handleDelete = async (dept) => {
         try {
-            // 🔍 Check your browser console! 
-            // Make sure the dept.name you clicked matches the one printed here!
-            console.log("Attempting to delete:", dept); 
-            
-            const encryptedData = await securePayload({ 
-                ouName: dept.name, 
+            console.log("Attempting to delete:", dept);
+
+            const encryptedData = await securePayload({
+                ouName: dept.name,
                 name: dept.name,
-                dn: dept.dn 
+                dn: dept.dn
             });
-            
+
             await deleteDepartment(encryptedData);
-            
+
             showToast(`${dept.name} is deleted successfully`, 'success');
             fetchDepts();
         } catch (err) {
             console.error("Delete failed:", err);
-            
-            // 🚨 THE FIX: Extract the exact error message from the backend!
+
             const errorMessage = err.response?.data?.message || `Failed to delete ${dept.name}`;
-            
-            // This will now pop up saying "Cannot delete: Department contains users or nested OUs"
-            showToast(errorMessage, 'error'); 
+            showToast(errorMessage, 'error');
         }
     };
 
@@ -86,7 +88,6 @@ export default function Departments() {
         d.name.toLowerCase().includes(search.toLowerCase())
     );
 
-    // Pagination calculations
     const totalEntries = filtered.length;
     const totalPages = Math.max(1, Math.ceil(totalEntries / rowsPerPage));
     const startIndex = (currentPage - 1) * rowsPerPage;
@@ -95,12 +96,10 @@ export default function Departments() {
     const displayStart = totalEntries === 0 ? 0 : startIndex + 1;
     const displayEnd = totalEntries === 0 ? 0 : endIndex;
 
-    // Reset to first page when search or rowsPerPage changes
     useEffect(() => {
         setCurrentPage(1);
     }, [search, rowsPerPage]);
 
-    // Clamp current page when data or rowsPerPage changes
     useEffect(() => {
         if (currentPage > totalPages) setCurrentPage(totalPages);
     }, [totalPages]);
@@ -133,7 +132,12 @@ export default function Departments() {
 
                     <button
                         onClick={() => setDialogVisible(true)}
-                        className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition-all shadow-lg shadow-indigo-200 dark:shadow-none hover:scale-105 active:scale-95"
+                        disabled={!isSuperAdmin}
+                        title={!isSuperAdmin ? "Only Super Admins can create departments" : ""}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all ${isSuperAdmin
+                                ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200 dark:shadow-none hover:scale-105 active:scale-95"
+                                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                            }`}
                     >
                         <Plus size={18} /> New Department
                     </button>
@@ -163,25 +167,26 @@ export default function Departments() {
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-gray-50 border-b border-gray-100">
-                                    <th className="px-4 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-left">
-                                        Department Name
-                                    </th>
-                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
-                                        Total Users
-                                    </th>
-                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
-                                        Active
-                                    </th>
-                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
-                                        Inactive
-                                    </th>
-                                    <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
-                                        Action</th>
-                                </tr>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-left">
+                                    Department Name
+                                </th>
+                                <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                    Total Users
+                                </th>
+                                <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                    Active
+                                </th>
+                                <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                    Inactive
+                                </th>
+                                <th className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">
+                                    Action
+                                </th>
+                            </tr>
                         </thead>
 
                         <tbody className="divide-y divide-gray-100">
-                                {loading ? (
+                            {loading ? (
                                 <tr>
                                     <td colSpan="5" className="text-center py-8">
                                         <div className="animate-spin h-8 w-8 border-2 border-blue-500 border-t-transparent rounded-full mx-auto"></div>
@@ -217,14 +222,12 @@ export default function Departments() {
                                         </td>
 
                                         <td className="px-4 py-2 text-center">
-                                           <button
-    // 🚨 THE FIX: If total is completely missing, treat it as 0. 
-    disabled={parseInt(d.total || 0, 10) > 0 || parseInt(d.active || 0, 10) > 0}
-    onClick={() => handleDelete(d)} 
-    aria-label={`Delete ${d.name}`}
-    className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
->
-    
+                                            <button
+                                                disabled={parseInt(d.total || 0, 10) > 0 || parseInt(d.active || 0, 10) > 0}
+                                                onClick={() => handleDelete(d)}
+                                                aria-label={`Delete ${d.name}`}
+                                                className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
+                                            >
                                                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                                                     <polyline points="3 6 5 6 21 6" />
                                                     <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
@@ -243,16 +246,11 @@ export default function Departments() {
 
                 {/* 🔥 PAGINATION BAR (UI ONLY) */}
                 <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50">
-
-                    {/* LEFT TEXT */}
                     <div className="text-sm text-gray-500">
                         Showing <span className="font-medium text-gray-900">{displayStart}</span> to <span className="font-medium text-gray-900">{displayEnd}</span> of <span className="font-medium text-gray-900">{totalEntries}</span> entries
                     </div>
 
-                    {/* RIGHT CONTROLS */}
                     <div className="flex items-center gap-4">
-
-                        {/* ROWS */}
                         <div className="flex items-center gap-2">
                             <span className="text-sm text-gray-500">Rows:</span>
                             <select value={rowsPerPage} onChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); }} className="border border-gray-200 text-sm rounded-md px-2 py-1 focus:outline-none">
@@ -263,7 +261,6 @@ export default function Departments() {
                             </select>
                         </div>
 
-                        {/* PAGINATION BUTTONS */}
                         <div className="flex items-center gap-1">
                             <button
                                 onClick={() => setCurrentPage(1)}
