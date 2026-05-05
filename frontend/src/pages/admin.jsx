@@ -391,7 +391,7 @@ export default function Admin() {
                         <User className="text-indigo-600 dark:text-indigo-400" size={24} />
                     </div>
                     <div>
-                        <h2 className="text-2xl font-bold text-gray-900 dark:text-white m-0">Directory Users</h2>
+                        <h2 className="text-2xl font-bold text-gray-900 dark:text-white m-0">Total Users</h2>
                         <p className="text-sm text-gray-500 dark:text-gray-400">Manage organizational members and permissions</p>
                     </div>
                     <span className="ml-2 px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-400">
@@ -523,7 +523,7 @@ export default function Admin() {
                     <option value="">All Roles</option>
                     <option value="SUPER_ADMIN">Super Admin</option>
                     <option value="ADMIN">Admin</option>
-                    <option value="USER">Standard User</option>
+                    <option value="USER"> User</option>
                 </select>
 
                 {/* Status Filter */}
@@ -567,8 +567,21 @@ export default function Admin() {
     const renderCharts = () => {
         if (!deptStats || deptStats.length === 0) return null;
 
-        // 🚨 1. PARETO SORTING: Sort departments by headcount (largest first)
-        let sortedDepts = [...deptStats].sort((a, b) => b.total - a.total);
+        // 🚨 THE FIX: Filter the stats based on the selected departments dropdown!
+        let filteredStats = deptStats;
+        if (selectedDeptFilter.length > 0) {
+            filteredStats = deptStats.filter(stat => 
+                selectedDeptFilter.some(selected => 
+                    String(selected).toLowerCase() === String(stat.name).toLowerCase()
+                )
+            );
+        }
+
+        // If the filter removes all chartable data, hide the charts
+        if (filteredStats.length === 0) return null;
+
+        // 🚨 1. PARETO SORTING: Sort the FILTERED departments by headcount
+        let sortedDepts = [...filteredStats].sort((a, b) => b.total - a.total);
 
         // 🚨 2. SMART GROUPING: If more than 10 OUs, group the rest into "Other Depts"
         let barChartData = sortedDepts;
@@ -584,15 +597,14 @@ export default function Admin() {
             barChartData = [...top10, others];
         }
 
-        // Calculate totals for the Donut Chart
-        const totalActive = deptStats.reduce((acc, curr) => acc + curr.active, 0);
-        const totalInactive = deptStats.reduce((acc, curr) => acc + curr.inactive, 0);
+        // 🚨 3. DONUT CHART TOTALS: Calculate using the FILTERED stats
+        const totalActive = filteredStats.reduce((acc, curr) => acc + curr.active, 0);
+        const totalInactive = filteredStats.reduce((acc, curr) => acc + curr.inactive, 0);
         const pieData = [
             { name: 'Active', value: totalActive, color: '#10B981' }, 
             { name: 'Inactive', value: totalInactive, color: '#EF4444' } 
         ];
 
-        // Determine if we need to slant the labels based on how many bars there are
         const needsSlant = barChartData.length > 5;
 
         return (
@@ -814,13 +826,13 @@ export default function Admin() {
                                 onClick={handleBulkSuspend}
                                 className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
-                                <AlertCircle size={14} /> Suspend Selected
+                                <AlertCircle size={14} /> Inactive User
                             </button>
                             <button 
                                 onClick={handleBulkDelete}
                                 className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
-                                <Trash2 size={14} /> Delete Selected
+                                <Trash2 size={14} /> Delete User
                             </button>
                         </div>
                     </div>
@@ -873,8 +885,9 @@ export default function Admin() {
                                     </td>
                                 </tr>
                             // 🚨 CHANGED TO users.map
+                            // 🚨 CHANGED TO users.map
                             ) : users.map((user) => (
-                                <tr key={user.uid} className={`transition-colors group ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
+                                <tr key={user.uid} className={`transition-colors ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
                                     <td className="px-6 py-4">
                                         <input 
                                             type="checkbox" 
@@ -901,7 +914,7 @@ export default function Admin() {
                                                         e.target.nextSibling.style.display = 'flex';
                                                     }}
                                                 />
-                                                <div className="hidden w-12 h-12 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-base">
+                                                <div className="hidden w-12 h-12 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 items-center justify-center font-bold text-base">
                                                     {user.firstName[0]}{user.lastName[0]}
                                                 </div>
                                             </div>
@@ -919,7 +932,7 @@ export default function Admin() {
                                             {user.role}
                                         </span>
                                     </td>
-                                    <td className="px-4 py-4">
+                                    <td className="px-4 py-4 text-center">
                                         <div className="flex flex-col items-center gap-1.5">
                                             <button
                                                 onClick={() => handleToggle(user)}
@@ -937,7 +950,7 @@ export default function Admin() {
                                         </div>
                                     </td>
                                     <td className="px-4 py-4 text-right">
-                                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 transform translate-x-2 group-hover:translate-x-0">
+                                        <div className="flex justify-end gap-1">
                                             <button
                                                 onClick={() => openView(user)}
                                                 className="p-2 rounded-xl text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all"
@@ -970,6 +983,7 @@ export default function Admin() {
                         </tbody>
                     </table>
                 </div>
+                {/* --- TO HERE --- */}
                 {renderPagination()}
             </div>
 
@@ -995,7 +1009,7 @@ export default function Admin() {
 
                     {bulkReport.errors.length > 0 && (
                         <div className="space-y-2">
-                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-[0.1em]">Details & Errors</h4>
+                            <h4 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Details & Errors</h4>
                             <div className="max-h-40 overflow-y-auto border border-gray-100 dark:border-gray-700 rounded-xl p-3 bg-gray-50 dark:bg-gray-900/50">
                                 <ul className="space-y-2">
                                     {bulkReport.errors.map((err, i) => (

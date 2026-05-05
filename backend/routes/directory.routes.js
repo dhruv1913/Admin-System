@@ -30,6 +30,7 @@ router.get('/ous-stats', dirController.getDepartmentsStats);
 router.post('/add-ou', decryptPayload, dirController.createDepartment);
 router.delete('/delete-ou', decryptPayload, dirController.deleteDepartment);
 
+
 router.get('/logs/sessions', dirController.getSessionLogs);
 router.get('/logs/audits', dirController.getAuditLogs);
 

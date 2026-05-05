@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getSessionLogs, getAuditLogs } from "../services/logService";
 import { Search, Monitor, Globe, Clock, ShieldCheck } from "lucide-react";
+// import { revokeUserSession } from "../services/adminService";
 
 export default function Logs() {
     const [sessionLogs, setSessionLogs] = useState([]);
@@ -68,6 +69,22 @@ export default function Logs() {
     const totalPages = Math.ceil(totalRecords / rowsPerPage);
     const paginatedLogs = filteredLogs.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
+//     const handleRevokeSession = async (uid) => {
+//     if (!window.confirm(`Are you sure you want to terminate the active session for ${uid}? They will be logged out immediately.`)) {
+//         return;
+//     }
+
+//     try {
+//         await revokeUserSession(uid);
+//         showToast("Session successfully terminated.", "success");
+//         // Refetch your logs here so the table updates!
+//         // loadLogs(); 
+//     } catch (error) {
+//         console.error("Failed to revoke session:", error);
+//         showToast("Failed to terminate session.", "error");
+//     }
+// };
+
     useEffect(() => {
         setCurrentPage(1);
     }, [activeTab, search, rowsPerPage]);
@@ -86,6 +103,12 @@ export default function Logs() {
                             <p className="text-xs text-gray-500 dark:text-gray-400 font-medium">Track session history and administrative changes</p>
                         </div>
                     </div>
+
+                     <td className="px-4 py-4 text-right flex items-center justify-end gap-2">
+    {/* <span className="text-green-600 font-bold text-sm">Active Now</span>  */}
+    {/* 🚨 ADD THE KILL SWITCH BUTTON */}
+   
+</td>
 
                     <div className="flex bg-gray-100 dark:bg-gray-900 p-1 rounded-xl">
                         <button

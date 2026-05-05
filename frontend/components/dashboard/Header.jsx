@@ -8,6 +8,8 @@ export default function Header({ collapsed, title, subtitle }) {
   const { auth, handleLogout } = useAuth();
   const sidebarWidth = collapsed ? "64px" : "256px";
 
+  const API_URL = import.meta.env.VITE_API_URL;
+
   let displayTitle = title;
   if (title === "Dashboard" && auth?.role) {
     const rolePrefix = auth.role === 'SUPER_ADMIN' ? 'Super Admin' : auth.role === 'ADMIN' ? 'Admin' : 'User';
@@ -37,14 +39,37 @@ export default function Header({ collapsed, title, subtitle }) {
 
       {/* Profile & Actions Area */}
       <div className="flex items-center gap-6">
-        {/* User Info (name first, then label, then role tag in red) */}
-        <div className="hidden md:flex items-center text-white">
-          <span className="font-bold text-sm mr-3">{auth?.name || "User"}</span>
-          <span className="text-[10px] opacity-60 uppercase font-black tracking-widest mr-3">Logged in as</span>
-          <Tag
-            value={(auth?.role || '').toUpperCase()}
-            className="text-[10px] font-bold uppercase px-3 py-1 rounded-full border border-red-200 bg-red-50 text-red-600"
-          />
+    
+       {/* Modern Profile Block */}
+        <div className="hidden md:flex items-center gap-3">
+            <div className="flex flex-col items-end">
+                <span className="text-sm font-bold text-white leading-tight">
+                    {auth?.username || auth?.firstName || auth?.name || "Super Admin"}
+                </span>
+                <span className="text-[10px] font-bold text-white/70 uppercase tracking-widest">
+                    {auth?.role ? auth.role.replace(/_/g, ' ') : "ADMINISTRATOR"}
+                </span>
+            </div>
+            
+            {/* Avatar Circle */}
+            <div className="relative w-10 h-10 rounded-full border-2 border-white/20 shadow-sm overflow-hidden bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors shrink-0">
+                
+                {/* Try to load the uploaded image */}
+                <img
+                    src={auth?.labeledURI ? `${API_URL}/${auth.labeledURI}?t=${new Date().getTime()}` : `${API_URL}/uploads/${auth?.uid}.jpg?t=${new Date().getTime()}`}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                    onError={(e) => {
+                        // If image fails to load (or doesn't exist), hide it and show the icon
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'flex';
+                    }}
+                />
+                {/* Fallback Icon (Hidden by default, shown if image fails) */}
+                <div className="hidden items-center justify-center text-white w-full h-full">
+                    <User size={18} />
+                </div>
+            </div>
         </div>
 
       </div>
