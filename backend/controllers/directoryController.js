@@ -24,6 +24,7 @@ const generateSSHA = (password) => {
     return '{SSHA}' + ssha;
 };
 
+// Cleans the input object by removing nulls, undefined, empty strings, and empty arrays. Also converts numbers to strings for LDAP compatibility.
 const cleanEntry = (entry) => {
     const clean = {};
     for (const key in entry) {
@@ -40,6 +41,7 @@ const cleanEntry = (entry) => {
     return clean;
 };
 
+// Checks if the target OU is in the list of allowed OUs (case-insensitive, trimmed)
 const isAllowedOU = (allowedOUs, targetOU) => {
 
     if (!allowedOUs || !Array.isArray(allowedOUs) || !targetOU) return false;
@@ -776,7 +778,7 @@ exports.deleteDepartment = async (req, res) => {
     // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
     
-    // Sometimes FormData stringifies boolean/null values, so we carefully extract the DN
+    
     let providedDn = req.body.dn || req.query.dn;
     if (providedDn === "undefined" || providedDn === "null") providedDn = null;
 

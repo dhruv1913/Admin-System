@@ -4,8 +4,20 @@ const session = require('express-session');
 const routes = require('./routes');
 const errorMiddleware = require('./middleware/errorMiddleware');
 const path = require('path');
-
+const cookieParser = require('cookie-parser');
+const csrf = require('csurf');
 const app = express();
+
+app.use(cors({
+    origin: process.env.FRONTEND_URL,
+    credentials: true
+}));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+app.use(cookieParser());
+const csrfProtection = csrf({ cookie: true });
+app.use(csrfProtection);
 
 // 1. Global Middleware
 app.use(cors({

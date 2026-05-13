@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { getSessionLogs, getAuditLogs } from "../services/logService";
 import { Search, Monitor, Globe, Clock, ShieldCheck } from "lucide-react";
-// import { revokeUserSession } from "../services/adminService";
 
 export default function Logs() {
     const [sessionLogs, setSessionLogs] = useState([]);
@@ -24,7 +23,6 @@ export default function Logs() {
                 getAuditLogs()
             ]);
 
-            // 🚨 THE FIX: Aggressively hunt down the array inside the response object
             const extractArray = (res) => {
                 if (!res) return [];
                 if (Array.isArray(res)) return res; 
@@ -57,7 +55,6 @@ export default function Logs() {
     const filteredLogs = currentLogs.filter(log => {
         const q = search.toLowerCase();
         if (!q) return true;
-        // 🚨 FIX: Allow searching by username OR ldap_uid
         return (
             ((log.username || log.ldap_uid || "").toLowerCase().includes(q)) ||
             ((log.ip_address || "").toLowerCase().includes(q)) ||
@@ -103,8 +100,7 @@ export default function Logs() {
                             className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === "audit"
                                 ? "bg-white dark:bg-gray-800 text-indigo-600 dark:text-indigo-400 shadow-sm"
                                 : "text-gray-500 dark:text-gray-400 hover:text-gray-700"
-                                }`}
-                        >
+                                }`}>
                             Admin Actions
                         </button>
                     </div>
@@ -169,7 +165,7 @@ export default function Logs() {
                                         <>
                                             <td className="px-4 py-4">
                                                 <div className="flex flex-col">
-                                                    {/* 🚨 FIX: Extract username instead of ldap_uid */}
+                                                    
                                                     <span className="font-bold text-gray-900 dark:text-white text-sm">{log.username || log.ldap_uid || "Unknown"}</span>
                                                     <span className="text-[10px] text-gray-500 dark:text-gray-400 flex items-center gap-1">
                                                         <Globe size={10} /> {log.ip_address}
@@ -180,7 +176,7 @@ export default function Logs() {
                                                 <div className="flex items-center gap-3">
                                                     <Monitor size={18} className="text-gray-400" />
                                                     <div className="flex flex-col">
-                                                        {/* 🚨 FIX: Correct browser and OS properties */}
+                                                        
                                                         <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{log.browser || log.browser_name || "System"} {log.browser_version || ""}</span>
                                                         <span className="text-[10px] text-gray-500 dark:text-gray-400">{log.os || log.browser_plateform || "Unknown"}</span>
                                                     </div>

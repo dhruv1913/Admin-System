@@ -54,7 +54,7 @@ export default function Header({ collapsed, title, subtitle }) {
             {/* Avatar Circle */}
             <div className="relative w-10 h-10 rounded-full border-2 border-white/20 shadow-sm overflow-hidden bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors shrink-0">
                 
-                {/* Try to load the uploaded image */}
+                
                 <img
                     src={auth?.labeledURI ? `${API_URL}/${auth.labeledURI}?t=${new Date().getTime()}` : `${API_URL}/uploads/${auth?.uid}.jpg?t=${new Date().getTime()}`}
                     alt="Profile"

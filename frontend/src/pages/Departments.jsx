@@ -23,10 +23,8 @@ export default function Departments() {
     const navigate = useNavigate();
     const [notification, setNotification] = useState(null);
 
-    // 🚨 FIX 2: Grab the auth object from the context
     const { auth } = useAuth();
 
-    // Now it knows exactly what 'auth' is!
     const isSuperAdmin = auth?.role === 'SUPER_ADMIN' || auth?.role === 'super_admin';
 
     const showToast = (message, type = 'success') => {
@@ -244,7 +242,7 @@ export default function Departments() {
                     </table>
                 </div>
 
-                {/* 🔥 PAGINATION BAR (UI ONLY) */}
+                {/*  PAGINATION BAR (UI ONLY) */}
                 <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50">
                     <div className="text-sm text-gray-500">
                         Showing <span className="font-medium text-gray-900">{displayStart}</span> to <span className="font-medium text-gray-900">{displayEnd}</span> of <span className="font-medium text-gray-900">{totalEntries}</span> entries

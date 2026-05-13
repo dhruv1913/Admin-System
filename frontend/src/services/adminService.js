@@ -1,4 +1,5 @@
-import apiClient from "./apiClient";
+import axios from 'axios';
+import apiClient from '../services/apiClient';
 
 export const getUsers = () => apiClient.get("/directory/users");
 export const getAllUsers = (params) => apiClient.get("/directory/users/all", { params });
@@ -18,3 +19,5 @@ export const bulkDeleteUsers = (data) => apiClient.post("/directory/bulk-delete"
 export const bulkSuspendUsers = (data) => apiClient.post("/directory/bulk-suspend", data);
 
 export const getDeptStats = () => apiClient.get("/directory/ous-stats");
+
+// axios.put('/api/directory/edit', data);

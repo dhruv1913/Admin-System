@@ -76,7 +76,7 @@ app.use(cors({
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   // 🚨 ADD 'x-service-key' TO THIS LIST RIGHT HERE:
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-service-key', 'Accept'], 
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-service-key', 'Accept','x-csrf-token'], 
   credentials: true 
 }));
 

@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import ProtectedRoute from "../components/ProtectedRoute";
 
+
 // Pages
 import Admin from "./pages/admin";
 import Departments from "./pages/Departments";
@@ -15,6 +16,7 @@ import DashboardLayout from "../components/DashboardLayout";
 // If they aren't authenticated, send them to the SSO Portal.
 const LoginRedirector = () => {
     const { auth, loading, SSO_PORTAL_URL } = useAuth();
+
 
     if (loading) {
         return (

@@ -440,6 +440,8 @@ export default function Admin() {
                 </div>
             </div>
 
+            
+                {/*NEW: Filters Row! */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Search */}
                 <div className="relative">
@@ -476,7 +478,7 @@ export default function Admin() {
                                 />
                             </div>
 
-                            {/* 🚨 THE FIX: Smart Sorting and DOM Rendering Limit */}
+                            
                             {ous
                                 .filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase()))
                                 .sort((a, b) => {
@@ -537,7 +539,7 @@ export default function Admin() {
                     <option value="INACTIVE">Inactive Only</option>
                 </select>
             </div>
-            {/* 🚨 NEW: Active Filter Chips UI */}
+            {/*  Active Filter Chips UI */}
             {selectedDeptFilter.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 mt-4 animate-in fade-in slide-in-from-top-2">
                     <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mr-1">Filtered By:</span>
@@ -810,7 +812,7 @@ export default function Admin() {
                 {renderHeader()}
                 {renderCharts()}
 
-                {/* 🚨 BULK ACTIONS TOOLBAR */}
+                {/*  BULK ACTIONS TOOLBAR */}
                 {selectedUsers.length > 0 && (
                     <div className="bg-indigo-50 dark:bg-indigo-900/30 border-y border-indigo-100 dark:border-indigo-800 px-6 py-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
                         <div className="flex items-center gap-3">
@@ -838,6 +840,7 @@ export default function Admin() {
                     </div>
                 )}
 
+            
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
@@ -868,7 +871,6 @@ export default function Admin() {
                                     </td>
                                 </tr>
 
-                                // 🚨 CHANGED TO users.length
                             ) : users.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="px-4 py-20 text-center">
@@ -884,8 +886,7 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                                // 🚨 CHANGED TO users.map
-                                // 🚨 CHANGED TO users.map
+                                
                             ) : users.map((user) => (
                                 <tr key={user.uid} className={`transition-colors ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
                                     <td className="px-6 py-4">
@@ -983,7 +984,7 @@ export default function Admin() {
                         </tbody>
                     </table>
                 </div>
-                {/* --- TO HERE --- */}
+                
                 {renderPagination()}
             </div>
 
