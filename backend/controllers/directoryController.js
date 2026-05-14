@@ -7,6 +7,7 @@ const dbService = require('../services/dbService');
 const xlsx = require("xlsx");
 const crypto = require('crypto');
 const ldap = require('ldapjs');
+const { isRealImage, saveSecureImage } = require('../utils/fileValidator');
 
 
 // ==========================================
@@ -271,6 +272,18 @@ exports.editUser = async (req, res) => {
 
     const client = createClient();
     try {
+
+        if (req.file) {
+            // 1. Check the binary Magic Numbers
+            if (!isRealImage(req.file.buffer)) {
+                return res.status(403).json({ 
+                    message: "🚨 Fake image detected! Only real PNG/JPG files are allowed." 
+                });
+            }
+            // 2. It's a real image! Save it safely to the disk
+            saveSecureImage(req.file.buffer, uid);
+        }
+        
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
@@ -879,7 +892,6 @@ exports.bulkSuspend = async (req, res) => {
         return res.status(500).json({ message: "Bulk suspend failed" });
     } finally { try { client.unbind(); } catch (e) {} }
 };
-
 
 
 exports.getSessionLogs = async (req, res) => {

@@ -22,6 +22,9 @@ const storage = multer.diskStorage({
 // Tip: 25KB is very small for an image. You might want to temporarily increase this to 500KB (500 * 1024) 
 // to make sure your test images aren't silently failing the size check!
 const photoUpload = multer({ storage: storage, limits: { fileSize: 500 * 1024 } }); 
-const uploadMemory = multer({ storage: multer.memoryStorage() });
+const uploadMemory = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 500 * 1024 } // 500KB Limit
+});
 
 module.exports = { photoUpload, uploadMemory };
