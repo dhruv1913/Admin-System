@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import Modal from './ui/Modal';
 import { Camera, X, Check, ChevronDown } from 'lucide-react';
 
-export default function UserFormDialog({ visible, onHide, editMode, formData, setFormData, ous, selectedFile, setSelectedFile, handleSubmit }) {
+export default function UserFormDialog({ visible, onHide, editMode, formData, setFormData, ous, selectedFile, setSelectedFile, handleSubmit, currentUserRole }) {
     const [showDeptDropdown, setShowDeptDropdown] = useState(false);
 
     const togglePermission = (dept) => {
@@ -175,7 +175,9 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                     <div>
                         <label className="block mb-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">Access Level</label>
                         <div className="grid grid-cols-3 gap-2">
-                            {['USER', 'ADMIN', 'SUPER_ADMIN'].map(role => (
+                            {['USER', 'ADMIN', 'SUPER_ADMIN']
+                                .filter(role => role !== 'SUPER_ADMIN' || currentUserRole === 'SUPER_ADMIN' || currentUserRole === 'super_admin')
+                                .map(role => (
                                 <button
                                     key={role}
                                     type="button"

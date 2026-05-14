@@ -12,8 +12,9 @@ router.use(authMiddleware);
 router.get('/users/:ou', dirController.getUsers);
 
 
-router.post('/add', photoUpload.single('photo'), decryptPayload, dirController.addUser);
-router.put('/edit', photoUpload.single('photo'), decryptPayload, dirController.editUser);
+// 🚨 THE FIX: Use uploadMemory so the Magic Number scanner can read the file!
+router.post('/add', uploadMemory.single('photo'), decryptPayload, dirController.addUser);
+router.put('/edit', uploadMemory.single('photo'), decryptPayload, dirController.editUser);
 
 router.delete('/delete/:uid', dirController.deleteUser);
 router.post('/bulk', uploadMemory.single('file'), dirController.bulkImport);
@@ -27,7 +28,6 @@ router.get('/export', dirController.exportUsers);
 router.get('/ous', dirController.getOUs);
 router.get('/ous-stats', dirController.getDepartmentsStats);
 
-// 🚨 Swapped secureMiddleware to decryptPayload for departments too
 router.post('/add-ou', decryptPayload, dirController.createDepartment);
 router.delete('/delete-ou', decryptPayload, dirController.deleteDepartment);
 

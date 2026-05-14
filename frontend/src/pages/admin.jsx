@@ -344,6 +344,14 @@ export default function Admin() {
     const openView = (user) => { setViewData(user); setViewDialog(true); };
 
     const handleEditClick = (u) => {
+        const isTargetSuperAdmin = u.role === "SUPER_ADMIN" || u.role === "super_admin";
+        const isMeSuperAdmin = auth?.role === "SUPER_ADMIN" || auth?.role === "super_admin";
+
+        if (isTargetSuperAdmin && !isMeSuperAdmin) {
+            showToast("Unauthorized: You do not have permission to edit a Super Admin.", "error");
+            return; // Stops the modal from ever opening!
+        }
+
         setEditMode(true);
         setSelectedFile(null);
         let permArray = [];
@@ -846,6 +854,7 @@ export default function Admin() {
                 visible={productDialog} onHide={hideDialog} editMode={editMode} formData={formData}
                 setFormData={setFormData} ous={ous} selectedFile={selectedFile}
                 setSelectedFile={setSelectedFile} handleSubmit={handleSubmit}
+                currentUserRole={auth?.role} // 🚨 ADDED: Passes user role down to dialog
             />
 
             {/* Conflict/Error Modal */}
@@ -924,7 +933,6 @@ export default function Admin() {
                                     </td>
                                 </tr>
 
-                                // 🚨 CHANGED TO users.length
                             ) : users.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="px-4 py-20 text-center">
@@ -940,16 +948,21 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                                // 🚨 CHANGED TO users.map
-                                // 🚨 CHANGED TO users.map
-                            ) : users.map((user) => (
+                            ) : users.map((user) => {
+                                // 🚨 NEW: HIERARCHY LOGIC: Admins cannot touch Super Admins
+                                const isTargetSuperAdmin = user.role === "SUPER_ADMIN" || user.role === "super_admin";
+                                const isMeSuperAdmin = auth?.role === "SUPER_ADMIN" || auth?.role === "super_admin";
+                                const canModifyUser = isMeSuperAdmin || !isTargetSuperAdmin;
+
+                                return (
                                 <tr key={user.uid} className={`transition-colors ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
                                     <td className="px-6 py-4">
                                         <input
                                             type="checkbox"
-                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                                             checked={selectedUsers.includes(user.uid)}
                                             onChange={() => handleSelectOne(user.uid)}
+                                            disabled={!canModifyUser} // 🚨 Prevent bulk selection of Super Admins by standard Admins
                                         />
                                     </td>
                                     <td className="px-4 py-4">
@@ -992,9 +1005,9 @@ export default function Admin() {
                                         <div className="flex flex-col items-center gap-1.5">
                                             <button
                                                 onClick={() => handleToggle(user)}
-                                                disabled={!hasWriteAccess}
+                                                disabled={!hasWriteAccess || !canModifyUser} // 🚨 Lock toggle
                                                 className={`relative inline-flex h-6 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${user.status === 'ACTIVE' ? 'bg-green-600' : 'bg-red-500'
-                                                    } ${!hasWriteAccess ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                    } ${(!hasWriteAccess || !canModifyUser) ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             >
                                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${user.status === 'ACTIVE' ? 'translate-x-6' : 'translate-x-0'
                                                     }`} />
@@ -1014,28 +1027,25 @@ export default function Admin() {
                                             >
                                                 <Eye size={18} />
                                             </button>
+                                            {/* 🚨 Only show Edit if they have write access AND outrank the target */}
                                             {hasWriteAccess && (
-                                                <>
-                                                    <button
-                                                        onClick={() => handleEditClick(user)}
-                                                        className="p-2 rounded-xl text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-all"
-                                                        title="Edit User"
-                                                    >
-                                                        <Pencil size={18} />
-                                                    </button>
-                                                    {/* <button
-                                                        onClick={() => confirmDelete(user)}
-                                                        className="p-2 rounded-xl text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
-                                                        title="Delete User"
-                                                    >
-                                                        <Trash2 size={18} />
-                                                    </button> */}
-                                                </>
+                                                <button
+                                                    onClick={() => handleEditClick(user)}
+                                                    disabled={!canModifyUser}
+                                                    className={`p-2 rounded-xl transition-all ${
+                                                        canModifyUser 
+                                                            ? "text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20" 
+                                                            : "text-gray-400 opacity-50 cursor-not-allowed"
+                                                    }`}
+                                                    title={canModifyUser ? "Edit User" : "Cannot edit Super Admin"}
+                                                >
+                                                    <Pencil size={18} />
+                                                </button>
                                             )}
                                         </div>
                                     </td>
                                 </tr>
-                            ))}
+                            )})}
                         </tbody>
                     </table>
                 </div>
