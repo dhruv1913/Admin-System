@@ -4,7 +4,6 @@ import apiClient from '../services/apiClient';
 export const getUsers = () => apiClient.get("/directory/users");
 export const getAllUsers = (params) => apiClient.get("/directory/users/all", { params });
 
-// 🚨 REMOVED explicit headers so Axios can auto-generate the boundaries!
 export const addUser = (data) => apiClient.post("/directory/add", data);
 export const editUser = (data) => apiClient.put("/directory/edit", data);
 
