@@ -5,7 +5,7 @@ import {
     Eye, Pencil, Trash2, Plus, GitBranch, Settings, Upload, Download,
     Check, AlertCircle, X, ChevronDown, User, MoreVertical
 } from "lucide-react";
-import { getAllUsers, getOUs, addUser, editUser, deleteUser, bulkImport, exportUsers, bulkDeleteUsers, bulkSuspendUsers } from "../services/adminService";
+import { getAllUsers, getOUs, addUser, editUser, deleteUser, bulkImport, exportUsers, bulkDeleteUsers, bulkSuspendUsers, bulkActivateUsers } from "../services/adminService";
 import { securePayload } from "../utils/encryption";
 import { useAuth } from "../context/AuthContext";
 
@@ -19,6 +19,42 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pi
 import { getDeptStats } from "../services/adminService";
 
 const API_URL = import.meta.env.VITE_API_URL;
+
+const StatusConfirmModal = ({ isOpen, onClose, onConfirm, isBusy, title, message, confirmLabel, confirmColor }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden transform transition-all animate-in zoom-in duration-300">
+                <div className="p-6">
+                    <h3 className={`text-xl font-bold mb-4 ${confirmColor === 'bg-green-600' ? 'text-green-600' : 'text-red-500'}`}>
+                        {title}
+                    </h3>
+                    
+                    <p className="text-gray-500 dark:text-gray-400 text-sm leading-relaxed mb-6">
+                        {message}
+                    </p>
+                    
+                    <div className="flex justify-end gap-3">
+                        <button 
+                            onClick={onClose}
+                            disabled={isBusy}
+                            className="px-6 py-2 text-sm font-bold text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={onConfirm}
+                            disabled={isBusy}
+                            className={`px-6 py-2 text-sm font-bold text-white rounded-lg transition-all active:scale-95 shadow-md disabled:opacity-50 disabled:cursor-not-allowed ${confirmColor} hover:brightness-110`}
+                        >
+                            {isBusy ? 'Wait...' : confirmLabel}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export default function Admin() {
     const { auth } = useAuth();
@@ -41,7 +77,14 @@ export default function Admin() {
     const [notification, setNotification] = useState(null);
 
     // Confirmation State
-    const [confirmDialog, setConfirmDialog] = useState({ visible: false, message: "", onConfirm: null });
+    const [confirmDialog, setConfirmDialog] = useState({ 
+        visible: false, 
+        title: "", 
+        message: "", 
+        confirmLabel: "", 
+        confirmColor: "bg-red-600",
+        onConfirm: null 
+    });
 
     // Multi-select dropdown state
     const [showDeptDropdown, setShowDeptDropdown] = useState(false);
@@ -114,25 +157,58 @@ export default function Admin() {
         );
     };
 
-    const handleBulkSuspend = async () => {
-        if (!window.confirm(`Are you sure you want to suspend ${selectedUsers.length} users?`)) return;
-        setLoading(true);
-        try {
-            // 🚨 FIX 1: Added 'await' and destructured { payload }
-            const { payload } = await securePayload({ uids: selectedUsers });
+    const handleBulkSuspend = () => {
+        setConfirmDialog({
+            visible: true,
+            title: "Suspend Users?",
+            message: `You are about to mark ${selectedUsers.length} users as INACTIVE. They will no longer be able to log in.`,
+            confirmLabel: "Suspend",
+            confirmColor: "bg-red-600",
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const { payload } = await securePayload({ uids: selectedUsers });
+                    await bulkSuspendUsers({ payload });
+                    showToast(`Successfully suspended ${selectedUsers.length} users`, "success");
+                    setSelectedUsers([]);
+                    loadUsers();
+                    loadStats();
+                } catch (error) {
+                    console.error("Bulk Suspend Error:", error);
+                    showToast("Failed to suspend users", "error");
+                } finally {
+                    setLoading(false);
+                    setConfirmDialog(prev => ({ ...prev, visible: false }));
+                }
+            }
+        });
+    };
 
-            // 🚨 FIX 2: Wrapped payload in an object so the backend decrypts it properly
-            await bulkSuspendUsers({ payload });
-
-            showToast(`Successfully suspended ${selectedUsers.length} users`, "success");
-            setSelectedUsers([]);
-            loadUsers();
-            loadStats();
-        } catch (error) {
-            console.error("Bulk Suspend Error:", error);
-            showToast("Failed to suspend users", "error");
-            setLoading(false);
-        }
+    const handleBulkActivate = () => {
+        setConfirmDialog({
+            visible: true,
+            title: "Activate Users?",
+            message: `You are about to mark ${selectedUsers.length} users as ACTIVE. They will regain access to the system.`,
+            confirmLabel: "Activate",
+            confirmColor: "bg-green-600",
+            onConfirm: async () => {
+                setLoading(true);
+                try {
+                    const { payload } = await securePayload({ uids: selectedUsers });
+                    await bulkActivateUsers({ payload });
+                    showToast(`Successfully activated ${selectedUsers.length} users`, "success");
+                    setSelectedUsers([]);
+                    loadUsers();
+                    loadStats();
+                } catch (error) {
+                    console.error("Bulk Activate Error:", error);
+                    showToast("Failed to activate users", "error");
+                } finally {
+                    setLoading(false);
+                    setConfirmDialog(prev => ({ ...prev, visible: false }));
+                }
+            }
+        });
     };
 
     const handleBulkDelete = async () => {
@@ -357,7 +433,10 @@ export default function Admin() {
     const confirmDelete = (user) => {
         setConfirmDialog({
             visible: true,
+            title: "Delete User?",
             message: `Are you sure you want to delete user ${user.firstName} ${user.lastName} (${user.uid})? This action cannot be undone.`,
+            confirmLabel: "Delete",
+            confirmColor: "bg-red-600",
             onConfirm: () => handleDelete(user)
         });
     };
@@ -365,7 +444,7 @@ export default function Admin() {
     const handleDelete = async (user) => {
         try {
             await deleteUser(user.uid);
-            showToast('User removed successfully', 'success');
+            showToast(`${user.firstName} ${user.lastName} removed successfully`, 'success');
             loadAllData();
         } catch (err) {
             showToast('Delete Failed', 'error');
@@ -440,8 +519,6 @@ export default function Admin() {
                 </div>
             </div>
 
-            
-                {/*NEW: Filters Row! */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                 {/* Search */}
                 <div className="relative">
@@ -478,7 +555,7 @@ export default function Admin() {
                                 />
                             </div>
 
-                            
+                            {/* 🚨 THE FIX: Smart Sorting and DOM Rendering Limit */}
                             {ous
                                 .filter(ou => ou.label.toLowerCase().includes(deptSearch.toLowerCase()))
                                 .sort((a, b) => {
@@ -539,7 +616,7 @@ export default function Admin() {
                     <option value="INACTIVE">Inactive Only</option>
                 </select>
             </div>
-            {/*  Active Filter Chips UI */}
+            {/* 🚨 NEW: Active Filter Chips UI */}
             {selectedDeptFilter.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 mt-4 animate-in fade-in slide-in-from-top-2">
                     <span className="text-xs font-bold text-gray-500 uppercase tracking-wider mr-1">Filtered By:</span>
@@ -623,9 +700,9 @@ export default function Admin() {
                             </span>
                         )}
                     </div>
-                    <div className="h-56"> {/* Slightly taller to accommodate slanted text */}
+                    <div className="h-80"> {/* Slightly taller to accommodate slanted text */}
                         <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={barChartData} margin={{ top: 10, right: 10, left: -20, bottom: needsSlant ? 25 : 0 }}>
+                            <BarChart data={barChartData} margin={{ top: 10, right: 10, left: -20, bottom: needsSlant ? 55 : 20 }}>
                                 <XAxis
                                     dataKey="name"
                                     tick={{ fontSize: 11, fill: '#6B7280' }}
@@ -650,7 +727,7 @@ export default function Admin() {
                 {/* DONUT CHART: Account Status */}
                 <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-xl border border-gray-100 dark:border-gray-700">
                     <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-4">Overall Status</h3>
-                    <div className="h-56">
+                    <div className="h-64">
                         <ResponsiveContainer width="100%" height="100%">
                             <PieChart>
                                 <Pie
@@ -752,39 +829,16 @@ export default function Admin() {
             )}
 
             {/* Confirmation Modal */}
-            <Modal
+            <StatusConfirmModal 
                 isOpen={confirmDialog.visible}
                 onClose={() => setConfirmDialog({ ...confirmDialog, visible: false })}
-                title="Confirm Action"
-                maxWidth="max-w-md"
-                footer={
-                    <>
-                        <button
-                            onClick={() => setConfirmDialog({ ...confirmDialog, visible: false })}
-                            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            onClick={confirmDialog.onConfirm}
-                            className="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold shadow-lg shadow-red-200 dark:shadow-none"
-                        >
-                            Confirm Delete
-                        </button>
-                    </>
-                }
-            >
-                <div className="flex items-start gap-4 py-2">
-                    <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-full shrink-0">
-                        <AlertCircle className="text-red-600 dark:text-red-400" size={24} />
-                    </div>
-                    <div>
-                        <p className="text-gray-600 dark:text-gray-300 leading-relaxed">
-                            {confirmDialog.message}
-                        </p>
-                    </div>
-                </div>
-            </Modal>
+                onConfirm={confirmDialog.onConfirm}
+                title={confirmDialog.title}
+                message={confirmDialog.message}
+                confirmLabel={confirmDialog.confirmLabel}
+                confirmColor={confirmDialog.confirmColor}
+                isBusy={loading}
+            />
 
             <UserProfileDialog visible={viewDialog} onHide={hideDialog} viewData={viewData} apiUrl={API_URL} />
 
@@ -812,7 +866,7 @@ export default function Admin() {
                 {renderHeader()}
                 {renderCharts()}
 
-                {/*  BULK ACTIONS TOOLBAR */}
+                {/* 🚨 BULK ACTIONS TOOLBAR */}
                 {selectedUsers.length > 0 && (
                     <div className="bg-indigo-50 dark:bg-indigo-900/30 border-y border-indigo-100 dark:border-indigo-800 px-6 py-3 flex items-center justify-between animate-in fade-in slide-in-from-top-2">
                         <div className="flex items-center gap-3">
@@ -826,30 +880,24 @@ export default function Admin() {
                         <div className="flex items-center gap-2">
                             <button
                                 onClick={handleBulkSuspend}
-                                className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
                                 <AlertCircle size={14} /> Inactive User
                             </button>
                             <button
-                                onClick={handleBulkDelete}
-                                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                                onClick={handleBulkActivate}
+                                className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
                             >
-                                <Trash2 size={14} /> Delete User
+                                <Check size={14} /> Active User
                             </button>
                         </div>
                     </div>
                 )}
 
-            
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="bg-gray-50/50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-700">
-                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Department</th>
-                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">User Profile</th>
-                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Access Role</th>
-                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Account Status</th>
-                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-right">Actions</th>
                                 <th className="px-6 py-4 w-12">
                                     <input
                                         type="checkbox"
@@ -858,6 +906,11 @@ export default function Admin() {
                                         onChange={handleSelectAll}
                                     />
                                 </th>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Department</th>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">User Profile</th>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Access Role</th>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Account Status</th>
+                                <th className="px-4 py-4 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider text-center">Actions</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -871,6 +924,7 @@ export default function Admin() {
                                     </td>
                                 </tr>
 
+                                // 🚨 CHANGED TO users.length
                             ) : users.length === 0 ? (
                                 <tr>
                                     <td colSpan="5" className="px-4 py-20 text-center">
@@ -886,7 +940,8 @@ export default function Admin() {
                                         </div>
                                     </td>
                                 </tr>
-                                
+                                // 🚨 CHANGED TO users.map
+                                // 🚨 CHANGED TO users.map
                             ) : users.map((user) => (
                                 <tr key={user.uid} className={`transition-colors ${selectedUsers.includes(user.uid) ? 'bg-indigo-50/50 dark:bg-indigo-900/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/30'}`}>
                                     <td className="px-6 py-4">
@@ -938,20 +993,20 @@ export default function Admin() {
                                             <button
                                                 onClick={() => handleToggle(user)}
                                                 disabled={!hasWriteAccess}
-                                                className={`relative inline-flex h-6 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${user.status === 'ACTIVE' ? 'bg-green-600' : 'bg-gray-300 dark:bg-gray-700'
+                                                className={`relative inline-flex h-6 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${user.status === 'ACTIVE' ? 'bg-green-600' : 'bg-red-500'
                                                     } ${!hasWriteAccess ? 'opacity-50 cursor-not-allowed' : ''}`}
                                             >
                                                 <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${user.status === 'ACTIVE' ? 'translate-x-6' : 'translate-x-0'
                                                     }`} />
                                             </button>
-                                            <span className={`text-xs font-bold uppercase tracking-widest ${user.status === 'ACTIVE' ? 'text-green-600 dark:text-green-400' : 'text-gray-400'
+                                            <span className={`text-xs font-bold uppercase tracking-widest ${user.status === 'ACTIVE' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
                                                 }`}>
                                                 {user.status}
                                             </span>
                                         </div>
                                     </td>
-                                    <td className="px-4 py-4 text-right">
-                                        <div className="flex justify-end gap-1">
+                                    <td className="px-4 py-4 text-center">
+                                        <div className="flex justify-center gap-1">
                                             <button
                                                 onClick={() => openView(user)}
                                                 className="p-2 rounded-xl text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all"
@@ -968,13 +1023,13 @@ export default function Admin() {
                                                     >
                                                         <Pencil size={18} />
                                                     </button>
-                                                    <button
+                                                    {/* <button
                                                         onClick={() => confirmDelete(user)}
                                                         className="p-2 rounded-xl text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-all"
                                                         title="Delete User"
                                                     >
                                                         <Trash2 size={18} />
-                                                    </button>
+                                                    </button> */}
                                                 </>
                                             )}
                                         </div>
@@ -984,7 +1039,7 @@ export default function Admin() {
                         </tbody>
                     </table>
                 </div>
-                
+                {/* --- TO HERE --- */}
                 {renderPagination()}
             </div>
 

@@ -1,15 +1,52 @@
 import { useEffect, useState } from "react";
 import Toast from "../../components/ui/Toast";
-import { Plus } from "lucide-react";
+import { Plus, Pencil } from "lucide-react";
 import {
     getDepartments,
     createDepartment,
     deleteDepartment,
+    updateDepartment,
 } from "../services/departmentService";
 import { securePayload } from "../utils/encryption";
 import { useNavigate } from "react-router-dom";
 // 🚨 FIX 1: Import useAuth so we can check the user's role
 import { useAuth } from "../context/AuthContext";
+
+const DeleteConfirmationModal = ({ isOpen, onClose, onConfirm, isBusy, message }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in duration-300">
+            <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden transform transition-all animate-in zoom-in duration-300">
+                <div className="p-6">
+                    <h3 className="text-xl font-bold mb-4 text-red-500">
+                        Delete Department?
+                    </h3>
+
+                    <p className="text-gray-500 dark:text-gray-400 text-sm leading-relaxed mb-6">
+                        {message}
+                    </p>
+
+                    <div className="flex justify-end gap-3">
+                        <button
+                            onClick={onClose}
+                            disabled={isBusy}
+                            className="px-6 py-2 text-sm font-bold text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            onClick={onConfirm}
+                            disabled={isBusy}
+                            className="px-6 py-2 text-sm font-bold text-white rounded-lg transition-all active:scale-95 bg-red-600 hover:bg-red-700 shadow-md shadow-red-200 dark:shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isBusy ? 'Wait...' : 'Delete'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 export default function Departments() {
     const [depts, setDepts] = useState([]);
@@ -19,12 +56,16 @@ export default function Departments() {
     const [search, setSearch] = useState("");
     const [currentPage, setCurrentPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(10);
+    const [confirmDialog, setConfirmDialog] = useState({ visible: false, message: "", dept: null });
+    const [editingDept, setEditingDept] = useState(null);
 
     const navigate = useNavigate();
     const [notification, setNotification] = useState(null);
 
+    // 🚨 FIX 2: Grab the auth object from the context
     const { auth } = useAuth();
 
+    // Now it knows exactly what 'auth' is!
     const isSuperAdmin = auth?.role === 'SUPER_ADMIN' || auth?.role === 'super_admin';
 
     const showToast = (message, type = 'success') => {
@@ -60,6 +101,54 @@ export default function Departments() {
         fetchDepts();
     };
 
+    const handleEdit = async () => {
+        if (!newDeptName.trim() || !editingDept) return;
+
+        const { payload, key, iv } = await securePayload({
+            oldName: editingDept.name,
+            newName: newDeptName,
+        });
+
+        try {
+            await updateDepartment({ payload, key, iv });
+            showToast(`${editingDept.name} renamed to ${newDeptName} successfully`, 'success');
+            setDialogVisible(false);
+            setNewDeptName("");
+            setEditingDept(null);
+            fetchDepts();
+        } catch (err) {
+            console.error("Rename failed:", err);
+            const errorMessage = err.response?.data?.message || `Failed to rename ${editingDept.name}`;
+            showToast(errorMessage, 'error');
+        }
+    };
+
+    const openEdit = (dept) => {
+        setEditingDept(dept);
+        setNewDeptName(dept.name);
+        setDialogVisible(true);
+    };
+
+    const openCreate = () => {
+        setEditingDept(null);
+        setNewDeptName("");
+        setDialogVisible(true);
+    };
+
+    const confirmDelete = (dept) => {
+        setConfirmDialog({
+            visible: true,
+            message: `Are you sure you want to delete the department "${dept.name}"? This action cannot be undone.`,
+            dept: dept
+        });
+    };
+
+    const executeDelete = async () => {
+        if (!confirmDialog.dept) return;
+        await handleDelete(confirmDialog.dept);
+        setConfirmDialog({ visible: false, message: "", dept: null });
+    };
+
     const handleDelete = async (dept) => {
         try {
             console.log("Attempting to delete:", dept);
@@ -72,7 +161,7 @@ export default function Departments() {
 
             await deleteDepartment(encryptedData);
 
-            showToast(`${dept.name} is deleted successfully`, 'success');
+            showToast(`${dept.name} department is deleted successfully`, 'success');
             fetchDepts();
         } catch (err) {
             console.error("Delete failed:", err);
@@ -129,12 +218,12 @@ export default function Departments() {
                     </div>
 
                     <button
-                        onClick={() => setDialogVisible(true)}
+                        onClick={openCreate}
                         disabled={!isSuperAdmin}
                         title={!isSuperAdmin ? "Only Super Admins can create departments" : ""}
                         className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all ${isSuperAdmin
-                                ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200 dark:shadow-none hover:scale-105 active:scale-95"
-                                : "bg-gray-200 text-gray-400 cursor-not-allowed"
+                            ? "bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg shadow-indigo-200 dark:shadow-none hover:scale-105 active:scale-95"
+                            : "bg-gray-200 text-gray-400 cursor-not-allowed"
                             }`}
                     >
                         <Plus size={18} /> New Department
@@ -221,18 +310,11 @@ export default function Departments() {
 
                                         <td className="px-4 py-2 text-center">
                                             <button
-                                                disabled={parseInt(d.total || 0, 10) > 0 || parseInt(d.active || 0, 10) > 0}
-                                                onClick={() => handleDelete(d)}
-                                                aria-label={`Delete ${d.name}`}
-                                                className="text-red-600 hover:text-red-700 disabled:opacity-30 p-2 rounded-full hover:bg-red-50 transition-colors"
+                                                onClick={() => openEdit(d)}
+                                                aria-label={`Edit ${d.name}`}
+                                                className="text-indigo-600 hover:text-indigo-700 p-2 rounded-full hover:bg-indigo-50 transition-colors"
                                             >
-                                                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                                                    <polyline points="3 6 5 6 21 6" />
-                                                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                                                    <path d="M10 11v6" />
-                                                    <path d="M14 11v6" />
-                                                    <path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2" />
-                                                </svg>
+                                                <Pencil size={18} />
                                             </button>
                                         </td>
                                     </tr>
@@ -242,7 +324,7 @@ export default function Departments() {
                     </table>
                 </div>
 
-                {/*  PAGINATION BAR (UI ONLY) */}
+                {/* 🔥 PAGINATION BAR (UI ONLY) */}
                 <div className="px-4 py-3 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-3 bg-gray-50">
                     <div className="text-sm text-gray-500">
                         Showing <span className="font-medium text-gray-900">{displayStart}</span> to <span className="font-medium text-gray-900">{displayEnd}</span> of <span className="font-medium text-gray-900">{totalEntries}</span> entries
@@ -305,7 +387,7 @@ export default function Departments() {
                 <div className="fixed inset-0 bg-black/30 flex items-center justify-center">
                     <div className="bg-white rounded-lg w-80 p-6 shadow-lg">
                         <h3 className="text-lg font-semibold mb-4">
-                            Create Department
+                            {editingDept ? 'Edit Department' : 'Create Department'}
                         </h3>
 
                         <input
@@ -324,15 +406,23 @@ export default function Departments() {
                             </button>
 
                             <button
-                                onClick={handleCreate}
+                                onClick={editingDept ? handleEdit : handleCreate}
                                 className="bg-blue-600 text-white px-3 py-1 rounded-md"
                             >
-                                Create
+                                {editingDept ? 'Update' : 'Create'}
                             </button>
                         </div>
                     </div>
                 </div>
             )}
+
+            <DeleteConfirmationModal
+                isOpen={confirmDialog.visible}
+                onClose={() => setConfirmDialog({ visible: false, message: "", dept: null })}
+                onConfirm={executeDelete}
+                message={confirmDialog.message}
+                isBusy={loading}
+            />
         </div>
     );
 }

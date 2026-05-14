@@ -64,11 +64,11 @@ const buildDuplicateFilter = (email, mobile, secondaryEmail) => {
 exports.getUsers = async (req, res) => {
     // 🚨 THE FIX: Alias 'search' to 'searchQuery' so it doesn't overwrite your LDAP function!
     const { page = 1, limit = 10, search: searchQuery = "", dept = "", role = "", status = "" } = req.query;
-    
+
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        
+
         // 2. Build a highly efficient LDAP Filter using 'searchQuery'
         let baseFilter = "(objectClass=inetOrgPerson)";
         if (searchQuery) {
@@ -95,7 +95,7 @@ exports.getUsers = async (req, res) => {
                 fName = rawCn.split(" ")[0];
                 lName = rawSn || rawCn.substring(rawCn.indexOf(" ") + 1);
             } else if (!rawSn || rawSn.toLowerCase() === rawCn.toLowerCase()) {
-                lName = ""; 
+                lName = "";
             }
 
             return {
@@ -141,12 +141,12 @@ exports.getUsers = async (req, res) => {
             totalRecords,
             totalPages
         }, "Users retrieved");
-        
+
     } catch (err) {
         console.error("Get Users Error:", err);
         return errorResponse(res, "Failed to fetch users", 500);
     } finally {
-        try { client.unbind(); } catch(e) {}
+        try { client.unbind(); } catch (e) { }
     }
 };
 
@@ -183,8 +183,8 @@ exports.addUser = async (req, res) => {
         // 🚨 2. GRANULAR DUPLICATE CHECK (Checks ONLY in the same Department)
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter) {
-            const duplicates = await search(client, `ou=${department},${getOrgBase()}`, { 
-                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description'] 
+            const duplicates = await search(client, `ou=${department},${getOrgBase()}`, {
+                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description']
             });
 
             if (duplicates.length > 0) {
@@ -276,14 +276,14 @@ exports.editUser = async (req, res) => {
         if (req.file) {
             // 1. Check the binary Magic Numbers
             if (!isRealImage(req.file.buffer)) {
-                return res.status(403).json({ 
-                    message: "🚨 Fake image detected! Only real PNG/JPG files are allowed." 
+                return res.status(403).json({
+                    message: "🚨 Fake image detected! Only real PNG/JPG files are allowed."
                 });
             }
             // 2. It's a real image! Save it safely to the disk
             saveSecureImage(req.file.buffer, uid);
         }
-        
+
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
@@ -302,8 +302,8 @@ exports.editUser = async (req, res) => {
         // 🚨 2. GRANULAR DUPLICATE CHECK FOR EDITING
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter && currentOU) {
-            const duplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, { 
-                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description'] 
+            const duplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, {
+                scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description']
             });
 
             // Filter out the user we are currently editing
@@ -350,7 +350,7 @@ exports.editUser = async (req, res) => {
             await dbService.updateUserPassword(uid, password);
             const ldapPassword = generateSSHA(password);
             await new Promise((resolve, reject) => {
-                const change = new ldap.Change({ operation: 'replace', modification: { type: 'userPassword', values: [ldapPassword] }});
+                const change = new ldap.Change({ operation: 'replace', modification: { type: 'userPassword', values: [ldapPassword] } });
                 client.modify(userDN, change, (err) => err ? reject(err) : resolve());
             });
         }
@@ -401,7 +401,7 @@ exports.editUser = async (req, res) => {
 exports.deleteUser = async (req, res) => {
     const { uid } = req.params;
 
-   if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
         return res.status(403).json({ message: "Unauthorized" });
     }
 
@@ -439,7 +439,7 @@ exports.bulkImport = async (req, res) => {
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        
+
         // 1. Read Excel
         const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
@@ -448,10 +448,10 @@ exports.bulkImport = async (req, res) => {
         const summary = { success: 0, failed: 0, errors: [] };
 
         // 2. Fetch all existing users to check for duplicates inside the same OU
-        const existingUsers = await search(client, getOrgBase(), { 
-            scope: "sub", 
-            filter: "(objectClass=inetOrgPerson)", 
-            attributes: ["uid", "mail", "mobile", "cn", "description", "dn"] 
+        const existingUsers = await search(client, getOrgBase(), {
+            scope: "sub",
+            filter: "(objectClass=inetOrgPerson)",
+            attributes: ["uid", "mail", "mobile", "cn", "description", "dn"]
         });
 
         // Group existing users by their OU (Department)
@@ -476,7 +476,7 @@ exports.bulkImport = async (req, res) => {
         for (let i = 0; i < data.length; i++) {
             const row = data[i];
             const rowNum = i + 2; // Excel row number (accounting for 0-index and header)
-            
+
             // Normalize column headers so spaces/capitalization don't break the import
             const user = {};
             Object.keys(row).forEach(k => {
@@ -497,15 +497,15 @@ exports.bulkImport = async (req, res) => {
             const secondaryEmail = user.secondaryEmail ? String(user.secondaryEmail).trim() : "";
             const password = user.password ? String(user.password) : "Password@123";
             const role = user.role ? String(user.role).trim().toUpperCase() : "USER";
-            
+
             const cn = `${fName} ${lName}`.trim();
             const ouKey = department.toLowerCase();
 
             // 🚨 BASIC VALIDATION
-            if (!uid || !fName) { 
-                summary.failed++; 
-                summary.errors.push(`Row ${rowNum}: Missing required fields (uid or firstname).`); 
-                continue; 
+            if (!uid || !fName) {
+                summary.failed++;
+                summary.errors.push(`Row ${rowNum}: Missing required fields (uid or firstname).`);
+                continue;
             }
 
             // 🚨 PERMISSIONS CHECK
@@ -522,15 +522,15 @@ exports.bulkImport = async (req, res) => {
             if (user.mobile !== undefined && user.mobile !== null && String(user.mobile).trim() !== "") {
                 // Strips spaces, dashes, +91, and grabs EXACTLY the last 10 digits
                 cleanMobile = String(user.mobile).replace(/\D/g, '').slice(-10);
-                
+
                 if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-                    summary.failed++; 
-                    summary.errors.push(`Row ${rowNum} (${uid}): Invalid mobile '${user.mobile}'. Must be exactly 10 digits starting with 6, 7, 8, or 9.`); 
+                    summary.failed++;
+                    summary.errors.push(`Row ${rowNum} (${uid}): Invalid mobile '${user.mobile}'. Must be exactly 10 digits starting with 6, 7, 8, or 9.`);
                     continue;
                 }
             } else {
-                summary.failed++; 
-                summary.errors.push(`Row ${rowNum} (${uid}): Mobile number is strictly required.`); 
+                summary.failed++;
+                summary.errors.push(`Row ${rowNum} (${uid}): Mobile number is strictly required.`);
                 continue;
             }
 
@@ -545,8 +545,8 @@ exports.bulkImport = async (req, res) => {
             const isDuplicate = (field, value) => {
                 if (!value || value === "") return false;
                 const valLower = String(value).toLowerCase();
-                return ouExisting.some(u => u[field] && String(u[field]).toLowerCase() === valLower) || 
-                       ouExcel.some(u => u[field] && String(u[field]).toLowerCase() === valLower);
+                return ouExisting.some(u => u[field] && String(u[field]).toLowerCase() === valLower) ||
+                    ouExcel.some(u => u[field] && String(u[field]).toLowerCase() === valLower);
             };
 
             if (isDuplicate('uid', uid)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): UID already exists.`); continue; }
@@ -561,15 +561,15 @@ exports.bulkImport = async (req, res) => {
             // 🚨 INSERT TO DB & LDAP
             const dn = `uid=${uid},ou=${department},${getOrgBase()}`;
             const entry = {
-                cn, 
-                sn: lName || fName, 
-                uid: uid, 
-                mail: email || undefined, 
-                mobile: cleanMobile, 
+                cn,
+                sn: lName || fName,
+                uid: uid,
+                mail: email || undefined,
+                mobile: cleanMobile,
                 description: secondaryEmail || undefined,
-                businessCategory: role, 
+                businessCategory: role,
                 employeeType: "ACTIVE",
-                userPassword: generateSSHA(password), 
+                userPassword: generateSSHA(password),
                 objectClass: ["inetOrgPerson", "top"]
             };
 
@@ -577,8 +577,8 @@ exports.bulkImport = async (req, res) => {
                 // Pre-check DB Mapping
                 const dbExists = await dbService.checkUserExists(uid);
                 if (dbExists) {
-                    summary.failed++; 
-                    summary.errors.push(`Row ${rowNum} (${uid}): UID already exists in PostgreSQL Database.`); 
+                    summary.failed++;
+                    summary.errors.push(`Row ${rowNum} (${uid}): UID already exists in PostgreSQL Database.`);
                     continue;
                 }
 
@@ -589,10 +589,10 @@ exports.bulkImport = async (req, res) => {
                 await new Promise((resolve, reject) => {
                     client.add(dn, cleanEntry(entry), (err) => err ? reject(err) : resolve());
                 });
-                
+
                 summary.success++;
             } catch (err) {
-                summary.failed++; 
+                summary.failed++;
                 summary.errors.push(`Row ${rowNum} (${uid}): LDAP Error - ${err.message}`);
             }
         }
@@ -604,7 +604,7 @@ exports.bulkImport = async (req, res) => {
         console.error("Bulk Import Error:", err);
         return res.status(500).json({ message: "Bulk import failed: " + err.message });
     } finally {
-        try { client.unbind(); } catch (e) {}
+        try { client.unbind(); } catch (e) { }
     }
 };
 
@@ -616,7 +616,7 @@ exports.exportUsers = async (req, res) => {
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        
+
         // 🚨 UPDATE: Added "description" (secondary email) to attributes to fetch
         const users = await search(client, getOrgBase(), {
             scope: "sub", filter: "(objectClass=inetOrgPerson)",
@@ -625,7 +625,7 @@ exports.exportUsers = async (req, res) => {
 
         let data = users.map(u => {
             const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
-            
+
             const rawCn = Array.isArray(u.cn) ? u.cn[0] : (u.cn || "");
             const rawSn = Array.isArray(u.sn) ? u.sn[0] : (u.sn || "");
 
@@ -637,7 +637,7 @@ exports.exportUsers = async (req, res) => {
                 fName = rawCn.split(" ")[0];
                 lName = rawSn || rawCn.substring(rawCn.indexOf(" ") + 1);
             } else if (!rawSn || rawSn.toLowerCase() === rawCn.toLowerCase()) {
-                lName = ""; 
+                lName = "";
             }
 
             // 🚨 EXACT MATCH TO YOUR IMPORT TEMPLATE HEADERS
@@ -708,7 +708,7 @@ exports.getDepartmentsStats = async (req, res) => {
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        
+
         // Fetch all OUs
         const entries = await search(client, getOrgBase(), { scope: "one", filter: "(objectClass=organizationalUnit)", attributes: ["ou"] });
         let depts = entries.map(e => Array.isArray(e.ou) ? e.ou[0] : e.ou)
@@ -733,13 +733,13 @@ exports.getDepartmentsStats = async (req, res) => {
             });
             stats.push({ name: dept, total: users.length, active: activeCount, inactive: inactiveCount });
         }
-        
+
         return successResponse(res, stats);
     } catch (err) {
         console.error("Stats Error:", err);
         return res.status(500).json({ message: "Error fetching stats" });
-    } finally { 
-        client.unbind(); 
+    } finally {
+        client.unbind();
     }
 };
 
@@ -790,8 +790,8 @@ exports.deleteDepartment = async (req, res) => {
 
     // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
-    
-    
+
+
     let providedDn = req.body.dn || req.query.dn;
     if (providedDn === "undefined" || providedDn === "null") providedDn = null;
 
@@ -802,7 +802,7 @@ exports.deleteDepartment = async (req, res) => {
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        
+
         // 🚨 THE FIX: Use the exact provided DN. If it's missing, rebuild it using the root base.
         const targetDn = providedDn ? providedDn : `ou=${name},${getOrgBase()}`;
 
@@ -850,13 +850,13 @@ exports.bulkDelete = async (req, res) => {
                     await dbService.deleteUserMapping(uid);
                     deleted++;
                 }
-            } catch(e) { console.error(`Failed to delete ${uid}`, e); }
+            } catch (e) { console.error(`Failed to delete ${uid}`, e); }
         }
         await logAction(req, "BULK_DELETE", req.user?.uid || "Admin", "ACTIVE", `Bulk deleted ${deleted} users`);
         return successResponse(res, null, `Successfully deleted ${deleted} users`);
     } catch (err) {
         return res.status(500).json({ message: "Bulk delete failed" });
-    } finally { try { client.unbind(); } catch (e) {} }
+    } finally { try { client.unbind(); } catch (e) { } }
 };
 
 exports.bulkSuspend = async (req, res) => {
@@ -876,21 +876,21 @@ exports.bulkSuspend = async (req, res) => {
                 const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
                 if (searchRes.length > 0) {
                     const userDN = searchRes[0].dn;
-                    await dbService.updateUserStatus(uid, false); 
-                    
+                    await dbService.updateUserStatus(uid, false);
+
                     await new Promise((resolve, reject) => {
                         const change = new ldap.Change({ operation: 'replace', modification: { type: 'employeeType', values: ['INACTIVE'] } });
                         client.modify(userDN, change, (err) => err ? reject(err) : resolve());
                     });
                     suspended++;
                 }
-            } catch(e) { console.error(`Failed to suspend ${uid}`, e); }
+            } catch (e) { console.error(`Failed to suspend ${uid}`, e); }
         }
         await logAction(req, "BULK_SUSPEND", req.user?.uid || "Admin", "INACTIVE", `Bulk suspended ${suspended} users`);
         return successResponse(res, null, `Successfully suspended ${suspended} users`);
     } catch (err) {
         return res.status(500).json({ message: "Bulk suspend failed" });
-    } finally { try { client.unbind(); } catch (e) {} }
+    } finally { try { client.unbind(); } catch (e) { } }
 };
 
 
@@ -902,4 +902,38 @@ exports.getSessionLogs = async (req, res) => {
 exports.getAuditLogs = async (req, res) => {
     try { const logs = await getAuditLogs(); return successResponse(res, logs); }
     catch (err) { return errorResponse(res, "Error fetching audit logs"); }
+};
+
+exports.bulkActivate = async (req, res) => {
+    const { uids } = req.body;
+    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
+
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
+        return res.status(403).json({ message: "Unauthorized" });
+    }
+
+    const client = createClient();
+    let activated = 0;
+    try {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        for (const uid of uids) {
+            try {
+                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
+                if (searchRes.length > 0) {
+                    const userDN = searchRes[0].dn;
+                    await dbService.updateUserStatus(uid, true);
+
+                    await new Promise((resolve, reject) => {
+                        const change = new ldap.Change({ operation: 'replace', modification: { type: 'employeeType', values: ['ACTIVE'] } });
+                        client.modify(userDN, change, (err) => err ? reject(err) : resolve());
+                    });
+                    activated++;
+                }
+            } catch (e) { console.error(`Failed to activate ${uid}`, e); }
+        }
+        await logAction(req, "BULK_ACTIVATE", req.user?.uid || "Admin", "ACTIVE", `Bulk activated ${activated} users`);
+        return successResponse(res, null, `Successfully activated ${activated} users`);
+    } catch (err) {
+        return res.status(500).json({ message: "Bulk activate failed" });
+    } finally { try { client.unbind(); } catch (e) { } }
 };

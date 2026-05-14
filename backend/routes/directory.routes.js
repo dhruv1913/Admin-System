@@ -1,9 +1,9 @@
- const express = require('express');
+const express = require('express');
 const router = express.Router();
 const dirController = require('../controllers/directoryController');
 const authMiddleware = require('../middleware/authMiddleware');
 const { photoUpload, uploadMemory } = require('../middleware/uploadMiddleware');
-    
+
 // 🚨 Only import our new bulletproof middleware
 const { decryptPayload } = require('../middleware/encryptionMiddleware');
 
@@ -20,6 +20,7 @@ router.post('/bulk', uploadMemory.single('file'), dirController.bulkImport);
 
 router.post('/bulk-delete', decryptPayload, dirController.bulkDelete);
 router.post('/bulk-suspend', decryptPayload, dirController.bulkSuspend);
+router.post('/bulk-activate', decryptPayload, dirController.bulkActivate);
 
 router.get('/export', dirController.exportUsers);
 

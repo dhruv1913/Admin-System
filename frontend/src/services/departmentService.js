@@ -1,4 +1,4 @@
-    import apiClient from "./apiClient";
+import apiClient from "./apiClient";
 
 export const getDepartments = () => apiClient.get("/directory/ous-stats");
 
@@ -7,3 +7,5 @@ export const createDepartment = (data) => apiClient.post("/directory/add-ou", da
 
 // Axios DELETE requires body data to be explicitly passed inside a 'data' property
 export const deleteDepartment = (data) => apiClient.delete("/directory/delete-ou", { data });
+
+export const updateDepartment = (data) => apiClient.put("/directory/edit-ou", data);
