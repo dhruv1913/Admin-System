@@ -754,53 +754,53 @@ exports.createDepartment = async (req, res) => {
     }
 };
 
-exports.deleteDepartment = async (req, res) => {
-    // 🚨 FIX: Allow admins to delete OUs
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
-        return res.status(403).json({ message: "Unauthorized" });
-    }
+// exports.deleteDepartment = async (req, res) => {
+//     // 🚨 FIX: Allow admins to delete OUs
+//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
+//         return res.status(403).json({ message: "Unauthorized" });
+//     }
 
-    // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
-    const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
+//     // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
+//     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
 
 
-    let providedDn = req.body.dn || req.query.dn;
-    if (providedDn === "undefined" || providedDn === "null") providedDn = null;
+//     let providedDn = req.body.dn || req.query.dn;
+//     if (providedDn === "undefined" || providedDn === "null") providedDn = null;
 
-    if (!name && !providedDn) {
-        return res.status(400).json({ message: "Department name or DN is required" });
-    }
+//     if (!name && !providedDn) {
+//         return res.status(400).json({ message: "Department name or DN is required" });
+//     }
 
-    const client = createClient();
-    try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+//     const client = createClient();
+//     try {
+//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
-        // 🚨 THE FIX: Use the exact provided DN. If it's missing, rebuild it using the root base.
-        const targetDn = providedDn ? providedDn : `ou=${name},${getOrgBase()}`;
+//         // 🚨 THE FIX: Use the exact provided DN. If it's missing, rebuild it using the root base.
+//         const targetDn = providedDn ? providedDn : `ou=${name},${getOrgBase()}`;
 
-        console.log(`🗑️ Attempting to delete exact DN: ${targetDn}`);
+//         console.log(`🗑️ Attempting to delete exact DN: ${targetDn}`);
 
-        // Ensure OU is empty before deleting
-        const users = await search(client, targetDn, { scope: "one", filter: "(objectClass=*)" });
-        if (users.length > 0) {
-            return res.status(400).json({ message: "Cannot delete: Department contains users or nested OUs" });
-        }
+//         // Ensure OU is empty before deleting
+//         const users = await search(client, targetDn, { scope: "one", filter: "(objectClass=*)" });
+//         if (users.length > 0) {
+//             return res.status(400).json({ message: "Cannot delete: Department contains users or nested OUs" });
+//         }
 
-        // Delete the OU
-        await new Promise((resolve, reject) => {
-            client.del(targetDn, (err) => err ? reject(err) : resolve());
-        });
+//         // Delete the OU
+//         await new Promise((resolve, reject) => {
+//             client.del(targetDn, (err) => err ? reject(err) : resolve());
+//         });
 
-        await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${targetDn}`);
-        return successResponse(res, null, "Department deleted");
+//         await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${targetDn}`);
+//         return successResponse(res, null, "Department deleted");
 
-    } catch (err) {
-        console.error("🚨 LDAP Delete OU Error:", err.message);
-        return res.status(500).json({ message: "Delete failed: " + err.message });
-    } finally {
-        try { client.unbind(); } catch (e) { }
-    }
-};
+//     } catch (err) {
+//         console.error("🚨 LDAP Delete OU Error:", err.message);
+//         return res.status(500).json({ message: "Delete failed: " + err.message });
+//     } finally {
+//         try { client.unbind(); } catch (e) { }
+//     }
+// };
 
 // exports.bulkDelete = async (req, res) => {
 //     const { uids } = req.body;
@@ -830,6 +830,55 @@ exports.deleteDepartment = async (req, res) => {
 //         return res.status(500).json({ message: "Bulk delete failed" });
 //     } finally { try { client.unbind(); } catch (e) { } }
 // };
+
+exports.editDepartment = async (req, res) => {
+    // 1. Security Check: Only Admins/Super Admins
+    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
+        return res.status(403).json({ message: "Unauthorized. Only Admins can rename departments." });
+    }
+
+    const { oldName, newName } = req.body;
+
+    if (!oldName || !newName) {
+        return res.status(400).json({ message: "Both current name and new name are required." });
+    }
+
+    const cleanOldName = String(oldName).trim();
+    const cleanNewName = String(newName).trim().replace(/[^a-zA-Z0-9 _-]/g, "");
+
+    if (cleanOldName === cleanNewName) {
+        return res.status(400).json({ message: "New name must be different from the current name." });
+    }
+
+    const client = createClient();
+    try {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+
+        // In LDAP, renaming a folder means modifying its "Distinguished Name" (DN)
+        const oldDN = `ou=${cleanOldName},${getOrgBase()}`;
+        const newRDN = `ou=${cleanNewName}`; // RDN = Relative Distinguished Name
+
+        await new Promise((resolve, reject) => {
+            // client.modifyDN is the specific LDAP command for renaming
+            client.modifyDN(oldDN, newRDN, (err) => err ? reject(err) : resolve());
+        });
+
+        await logAction(req, "UPDATE_OU", req.user?.uid || "Admin", "ACTIVE", `Renamed Department from '${cleanOldName}' to '${cleanNewName}'`);
+        
+        return successResponse(res, null, "Department renamed successfully");
+
+    } catch (err) {
+        console.error("🚨 LDAP Rename OU Error:", err);
+        
+        if (err.code === 68) return res.status(400).json({ message: `Department '${cleanNewName}' already exists!` });
+        if (err.code === 32) return res.status(404).json({ message: `Department '${cleanOldName}' not found!` });
+        if (err.code === 66) return res.status(400).json({ message: "Cannot rename a department that contains users. Please move the users first." });
+
+        return res.status(500).json({ message: "Failed to rename department: " + err.message });
+    } finally {
+        try { client.unbind(); } catch (e) { }
+    }
+};
 
 exports.bulkSuspend = async (req, res) => {
     const { uids } = req.body;
@@ -864,7 +913,6 @@ exports.bulkSuspend = async (req, res) => {
         return res.status(500).json({ message: "Bulk suspend failed" });
     } finally { try { client.unbind(); } catch (e) { } }
 };
-
 
 exports.getSessionLogs = async (req, res) => {
     try { const logs = await getSessionLogs(); return successResponse(res, logs); }
