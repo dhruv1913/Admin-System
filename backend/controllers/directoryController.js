@@ -434,16 +434,15 @@ exports.deleteUser = async (req, res) => {
 };
 
 exports.bulkImport = async (req, res) => {
-    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    // 1. Get the parsed users and selected department from the React Frontend
+    const { users, department } = req.body;
+
+    if (!users || users.length === 0) return res.status(400).json({ message: "No valid users found in request." });
+    if (!department) return res.status(400).json({ message: "Department is required." });
 
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-
-        // 1. Read Excel
-        const workbook = xlsx.read(req.file.buffer, { type: "buffer" });
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-        const data = xlsx.utils.sheet_to_json(sheet);
 
         const summary = { success: 0, failed: 0, errors: [] };
 
@@ -456,6 +455,7 @@ exports.bulkImport = async (req, res) => {
 
         // Group existing users by their OU (Department)
         const usersByOu = {};
+        let currentSequenceNumber = existingUsers.length + 1;
         existingUsers.forEach(u => {
             const match = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
             const ou = match ? match[1].toLowerCase() : 'general';
@@ -469,135 +469,107 @@ exports.bulkImport = async (req, res) => {
             });
         });
 
-        // Track rows processed in THIS Excel file to prevent duplicate rows from passing
-        const excelProcessedByOu = {};
+        const ouKey = department.toLowerCase();
+        if (!usersByOu[ouKey]) usersByOu[ouKey] = [];
+        
+        // Track rows processed in THIS batch to prevent duplicate rows from passing
+        const batchProcessedByOu = { [ouKey]: [] };
 
-        // 3. Process each row
-        for (let i = 0; i < data.length; i++) {
-            const row = data[i];
-            const rowNum = i + 2; // Excel row number (accounting for 0-index and header)
+        // 🚨 HELPER 1: Generate Sequential + Random UID (e.g. USR543001, USR543002)
+        const generateSequenceUid = (index) => {
+            const randomPart = Math.floor(100 + Math.random() * 900); // 3 random digits
+            const sequenceNum = index.toString().padStart(3, '0'); // 001, 002, 003...
+            return `USR${randomPart}${sequenceNum}`;
+        };
 
-            // Normalize column headers so spaces/capitalization don't break the import
-            const user = {};
-            Object.keys(row).forEach(k => {
-                const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, "");
-                if (['mobile', 'mobileno', 'phone'].includes(cleanKey)) user.mobile = row[k];
-                else if (['secondaryemail', 'altemail', 'description'].includes(cleanKey)) user.secondaryEmail = row[k];
-                else if (cleanKey === 'firstname') user.firstname = row[k];
-                else if (cleanKey === 'lastname') user.lastname = row[k];
-                else user[cleanKey] = row[k];
-            });
+        // 🚨 HELPER 2: Generate Random 12-char Password
+        const generateRandomPass = () => {
+            const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+            return Array.from({length: 12}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+        };
 
-            // Extract Variables
-            const uid = user.uid ? String(user.uid).trim() : null;
-            const fName = user.firstname ? String(user.firstname).trim() : "";
-            const lName = user.lastname ? String(user.lastname).trim() : "";
+        // 3. Process each user from the frontend array
+        // 3. Process each user from the frontend array
+        for (let i = 0; i < users.length; i++) {
+            const user = users[i];
+            const rowNum = i + 1; 
+
+            const fName = user.firstName ? String(user.firstName).trim() : "";
+            const lName = user.lastName ? String(user.lastName).trim() : "";
             const email = user.email ? String(user.email).trim() : "";
-            const department = user.department ? String(user.department).trim() : "General";
+            const rawMobile = user.mobile ? String(user.mobile).trim() : "";
             const secondaryEmail = user.secondaryEmail ? String(user.secondaryEmail).trim() : "";
-            const password = user.password ? String(user.password) : "Password@123";
-            const role = user.role ? String(user.role).trim().toUpperCase() : "USER";
-
             const cn = `${fName} ${lName}`.trim();
-            const ouKey = department.toLowerCase();
 
-            // 🚨 BASIC VALIDATION
-            if (!uid || !fName) {
-                summary.failed++;
-                summary.errors.push(`Row ${rowNum}: Missing required fields (uid or firstname).`);
-                continue;
+            // 🚨 VALIDATIONS FIRST (Before generating UID)
+            if (!fName || !email) {
+                summary.failed++; summary.errors.push(`User ${rowNum}: Missing First Name or Email.`); continue;
             }
 
-            // 🚨 PERMISSIONS CHECK
-            if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
+            if (req.user && req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
                 if (!isAllowedOU(req.user.allowedOUs, department)) {
-                    summary.failed++;
-                    summary.errors.push(`Row ${rowNum} (${uid}): Unauthorized to add users to department '${department}'.`);
-                    continue;
+                    summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Unauthorized department.`); continue;
                 }
             }
 
-            // 🚨 STRICT EXCEL MOBILE VALIDATION (Fixes formatting issues)
             let cleanMobile = "";
-            if (user.mobile !== undefined && user.mobile !== null && String(user.mobile).trim() !== "") {
-                // Strips spaces, dashes, +91, and grabs EXACTLY the last 10 digits
-                cleanMobile = String(user.mobile).replace(/\D/g, '').slice(-10);
-
+            if (rawMobile !== "") {
+                cleanMobile = rawMobile.replace(/\D/g, '').slice(-10);
                 if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
-                    summary.failed++;
-                    summary.errors.push(`Row ${rowNum} (${uid}): Invalid mobile '${user.mobile}'. Must be exactly 10 digits starting with 6, 7, 8, or 9.`);
-                    continue;
+                    summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Invalid mobile.`); continue;
                 }
             } else {
-                summary.failed++;
-                summary.errors.push(`Row ${rowNum} (${uid}): Mobile number is strictly required.`);
-                continue;
+                summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Mobile required.`); continue;
             }
 
-            // 🚨 SAME-DEPARTMENT DUPLICATE VALIDATION
-            if (!usersByOu[ouKey]) usersByOu[ouKey] = [];
-            if (!excelProcessedByOu[ouKey]) excelProcessedByOu[ouKey] = [];
-
             const ouExisting = usersByOu[ouKey];
-            const ouExcel = excelProcessedByOu[ouKey];
-
-            // Helper to check for matches
+            const ouBatch = batchProcessedByOu[ouKey];
             const isDuplicate = (field, value) => {
                 if (!value || value === "") return false;
                 const valLower = String(value).toLowerCase();
                 return ouExisting.some(u => u[field] && String(u[field]).toLowerCase() === valLower) ||
-                    ouExcel.some(u => u[field] && String(u[field]).toLowerCase() === valLower);
+                       ouBatch.some(u => u[field] && String(u[field]).toLowerCase() === valLower);
             };
 
-            if (isDuplicate('uid', uid)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): UID already exists.`); continue; }
-            if (isDuplicate('mobile', cleanMobile)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Mobile '${cleanMobile}' already exists in dept '${department}'.`); continue; }
-            if (isDuplicate('email', email)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Email already exists in dept '${department}'.`); continue; }
-            if (isDuplicate('secondaryEmail', secondaryEmail)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Secondary Email exists in dept '${department}'.`); continue; }
-            if (isDuplicate('cn', cn)) { summary.failed++; summary.errors.push(`Row ${rowNum} (${uid}): Name '${cn}' already exists in dept '${department}'.`); continue; }
+            if (isDuplicate('mobile', cleanMobile)) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Mobile exists.`); continue; }
+            if (isDuplicate('email', email)) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Email exists.`); continue; }
+            if (isDuplicate('cn', cn)) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Name exists.`); continue; }
 
-            // Add to processed list so we don't allow identical rows in the same Excel file
-            excelProcessedByOu[ouKey].push({ uid, email, mobile: cleanMobile, cn, secondaryEmail });
+            // 🚨 ALL CHECKS PASSED! NOW WE ASSIGN THE UID
+            const randomPart = Math.floor(100 + Math.random() * 900);
+            const seqString = currentSequenceNumber.toString().padStart(3, '0');
+            const uid = `USR${randomPart}${seqString}`;
+            const password = generateRandomPass(); // Your existing random pass generator
 
-            // 🚨 INSERT TO DB & LDAP
+            batchProcessedByOu[ouKey].push({ uid, email, mobile: cleanMobile, cn, secondaryEmail });
+
             const dn = `uid=${uid},ou=${department},${getOrgBase()}`;
             const entry = {
-                cn,
-                sn: lName || fName,
-                uid: uid,
-                mail: email || undefined,
-                mobile: cleanMobile,
-                description: secondaryEmail || undefined,
-                businessCategory: role,
-                employeeType: "ACTIVE",
-                userPassword: generateSSHA(password),
-                objectClass: ["inetOrgPerson", "top"]
+                cn, sn: lName || fName, uid: uid, mail: email || undefined, mobile: cleanMobile, description: secondaryEmail || undefined,
+                businessCategory: "USER", employeeType: "ACTIVE", userPassword: generateSSHA(password), objectClass: ["inetOrgPerson", "top"]
             };
 
             try {
-                // Pre-check DB Mapping
                 const dbExists = await dbService.checkUserExists(uid);
-                if (dbExists) {
-                    summary.failed++;
-                    summary.errors.push(`Row ${rowNum} (${uid}): UID already exists in PostgreSQL Database.`);
-                    continue;
-                }
+                if (dbExists) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): UID collision.`); continue; }
 
                 const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
                 await dbService.insertUserMapping(uid, password, userIP, dn);
 
-                // Add to LDAP
                 await new Promise((resolve, reject) => {
                     client.add(dn, cleanEntry(entry), (err) => err ? reject(err) : resolve());
                 });
 
+                // 🚨 SUCCESS! Only increment sequence number if the user is actually saved
+                currentSequenceNumber++; 
                 summary.success++;
             } catch (err) {
                 summary.failed++;
-                summary.errors.push(`Row ${rowNum} (${uid}): LDAP Error - ${err.message}`);
+                summary.errors.push(`User ${rowNum} (${fName}): LDAP Error - ${err.message}`);
             }
         }
 
-        await logAction(req, "BULK_IMPORT", req.user?.uid || "Admin", req.user?.role, "ACTIVE", `Imported ${summary.success} users`);
+        await logAction(req, "BULK_IMPORT", req.user?.uid || "Admin", req.user?.role, "ACTIVE", `Imported ${summary.success} users into ${department}`);
         return res.status(200).json({ summary });
 
     } catch (err) {
@@ -830,34 +802,34 @@ exports.deleteDepartment = async (req, res) => {
     }
 };
 
-exports.bulkDelete = async (req, res) => {
-    const { uids } = req.body;
-    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
+// exports.bulkDelete = async (req, res) => {
+//     const { uids } = req.body;
+//     if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
 
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
-        return res.status(403).json({ message: "Unauthorized" });
-    }
+//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
+//         return res.status(403).json({ message: "Unauthorized" });
+//     }
 
-    const client = createClient();
-    let deleted = 0;
-    try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        for (const uid of uids) {
-            try {
-                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
-                if (searchRes.length > 0) {
-                    await new Promise((resolve, reject) => client.del(searchRes[0].dn, (err) => err ? reject(err) : resolve()));
-                    await dbService.deleteUserMapping(uid);
-                    deleted++;
-                }
-            } catch (e) { console.error(`Failed to delete ${uid}`, e); }
-        }
-        await logAction(req, "BULK_DELETE", req.user?.uid || "Admin", "ACTIVE", `Bulk deleted ${deleted} users`);
-        return successResponse(res, null, `Successfully deleted ${deleted} users`);
-    } catch (err) {
-        return res.status(500).json({ message: "Bulk delete failed" });
-    } finally { try { client.unbind(); } catch (e) { } }
-};
+//     const client = createClient();
+//     let deleted = 0;
+//     try {
+//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+//         for (const uid of uids) {
+//             try {
+//                 const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
+//                 if (searchRes.length > 0) {
+//                     await new Promise((resolve, reject) => client.del(searchRes[0].dn, (err) => err ? reject(err) : resolve()));
+//                     await dbService.deleteUserMapping(uid);
+//                     deleted++;
+//                 }
+//             } catch (e) { console.error(`Failed to delete ${uid}`, e); }
+//         }
+//         await logAction(req, "BULK_DELETE", req.user?.uid || "Admin", "ACTIVE", `Bulk deleted ${deleted} users`);
+//         return successResponse(res, null, `Successfully deleted ${deleted} users`);
+//     } catch (err) {
+//         return res.status(500).json({ message: "Bulk delete failed" });
+//     } finally { try { client.unbind(); } catch (e) { } }
+// };
 
 exports.bulkSuspend = async (req, res) => {
     const { uids } = req.body;

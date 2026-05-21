@@ -128,16 +128,15 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                 {/* ID & Mobile Row */}
                 <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className={labelClasses}>User ID</label>
-                        <input 
-                            type="text" 
-                            value={formData.uid} 
-                            onChange={(e) => setFormData({...formData, uid: e.target.value})} 
-                            disabled={editMode} 
-                            required 
-                            className={`${inputClasses} ${editMode ? 'bg-gray-100 dark:bg-gray-700 opacity-60 cursor-not-allowed' : ''}`}
-                        />
-                    </div>
+                    <label className={labelClasses}>User ID (Auto-Generated)</label>
+                    <input
+                        type="text"
+                        value={formData.uid}
+                        disabled // 🚨 Locks the input in both Add and Edit modes
+                        className={`${inputClasses} bg-gray-100 dark:bg-gray-700 opacity-60 cursor-not-allowed`}
+                        required
+                    />
+                </div>
                     <div>
                         <label className={labelClasses}>Mobile Number</label>
                         <input 
@@ -161,12 +160,10 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                 <div>
                     <label className={labelClasses}>Password</label>
                     <input 
-                        type="password" 
-                        value={formData.password} 
-                        onChange={(e) => setFormData({...formData, password: e.target.value})} 
-                        placeholder={editMode ? "Leave empty to keep current" : "Enter password"} 
-                        className={inputClasses}
-                        required={!editMode}
+                        type="text" 
+                        value={editMode ? "••••••••••••" : formData.password} 
+                        disabled
+                        className={`${inputClasses} bg-gray-100 dark:bg-gray-700 opacity-60 cursor-not-allowed`}
                     />
                 </div>
                 

@@ -67,6 +67,7 @@ exports.getCaptcha = (req, res) => {
     }
 };
 
+
 exports.login = async (req, res) => {
   const { uid, captchaValue } = req.body || {};
 
@@ -130,6 +131,10 @@ exports.login = async (req, res) => {
     const role = Array.isArray(userRecord.businessCategory)
       ? userRecord.businessCategory[0]
       : userRecord.businessCategory || "USER";
+
+      if (role.toUpperCase() === "USER") {
+        return errorResponse(res, "Access Denied: Standard users are not permitted to log in.", 403);
+    }
 
     const name = Array.isArray(userRecord.cn)
       ? userRecord.cn[0]
@@ -304,6 +309,11 @@ exports.verifyOtp = async (req, res) => {
     const role = Array.isArray(userRecord.businessCategory)
       ? userRecord.businessCategory[0]
       : userRecord.businessCategory || "USER";
+
+      if (role.toUpperCase() === "USER") {
+        return res.status(403).json({ message: "Access Denied: Standard users are not permitted to log in." });
+    }
+    
     const name = Array.isArray(userRecord.cn)
       ? userRecord.cn[0]
       : userRecord.cn;

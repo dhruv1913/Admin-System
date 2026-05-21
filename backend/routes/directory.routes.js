@@ -17,9 +17,10 @@ router.post('/add', uploadMemory.single('photo'), decryptPayload, dirController.
 router.put('/edit', uploadMemory.single('photo'), decryptPayload, dirController.editUser);
 
 router.delete('/delete/:uid', dirController.deleteUser);
-router.post('/bulk', uploadMemory.single('file'), dirController.bulkImport);
+// Remove uploadMemory since we are sending JSON data now!
+router.post('/bulk', decryptPayload, dirController.bulkImport);
 
-router.post('/bulk-delete', decryptPayload, dirController.bulkDelete);
+// router.post('/bulk-delete', decryptPayload, dirController.bulkDelete);
 router.post('/bulk-suspend', decryptPayload, dirController.bulkSuspend);
 router.post('/bulk-activate', decryptPayload, dirController.bulkActivate);
 

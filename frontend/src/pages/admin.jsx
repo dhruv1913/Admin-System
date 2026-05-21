@@ -18,6 +18,9 @@ import Toast from "../../components/ui/Toast";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { getDeptStats } from "../services/adminService";
 
+import * as XLSX from 'xlsx';
+
+
 const API_URL = import.meta.env.VITE_API_URL;
 
 const StatusConfirmModal = ({ isOpen, onClose, onConfirm, isBusy, title, message, confirmLabel, confirmColor }) => {
@@ -102,6 +105,8 @@ export default function Admin() {
     const [bulkReport, setBulkReport] = useState({ success: 0, failed: 0, errors: [] });
     const fileUploadRef = useRef(null);
 
+    const nextUidRef = useRef(null);
+
     const [deptSearch, setDeptSearch] = useState('');
 
     const [deptStats, setDeptStats] = useState([]);
@@ -110,6 +115,11 @@ export default function Admin() {
     const [totalPages, setTotalPages] = useState(1);
 
     const [selectedUsers, setSelectedUsers] = useState([]);
+
+    const [importPreviewData, setImportPreviewData] = useState([]);
+    const [showImportPreview, setShowImportPreview] = useState(false);
+    const [importDepartment, setImportDepartment] = useState("");
+    
 
     const initialForm = {
         firstName: "", lastName: "", email: "", secondaryEmail: "",
@@ -339,7 +349,33 @@ export default function Admin() {
         }
     };
 
-    const openNew = () => { setFormData(initialForm); setSelectedFile(null); setEditMode(false); setProductDialog(true); };
+    const generatePassword = () => {
+        const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+        return Array.from({length: 12}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    };
+
+  
+    const openNew = () => { 
+        // 1. Figure out what the next sequence number should be
+        const currentSeq = (totalRecords + 1).toString().padStart(3, '0'); 
+
+        // 2. Only generate a NEW random prefix if we don't already have one for this sequence!
+        if (!nextUidRef.current || !nextUidRef.current.endsWith(currentSeq)) {
+            const randomPart = Math.floor(100 + Math.random() * 900);
+            nextUidRef.current = `USR${randomPart}${currentSeq}`;
+        }
+
+        // 3. Load the form with the locked, remembered UID
+        setFormData({ 
+            ...initialForm, 
+            password: generatePassword(), // Generates a fresh password
+            uid: nextUidRef.current       // Uses the remembered UID
+        }); 
+        setSelectedFile(null); 
+        setEditMode(false); 
+        setProductDialog(true); 
+    };
+        
     const hideDialog = () => { setProductDialog(false); setViewDialog(false); };
     const openView = (user) => { setViewData(user); setViewDialog(true); };
 
@@ -408,22 +444,84 @@ export default function Admin() {
         }
     };
 
-    const handleBulkImport = async (e) => {
+    // 1. Reads the Excel file on the frontend and opens the Preview Modal
+    // 1. Reads the Excel file on the frontend and opens the Preview Modal
+    const handleFileSelect = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        const formData = new FormData();
-        formData.append("file", file);
+
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+            const bstr = evt.target.result;
+            const wb = XLSX.read(bstr, { type: 'binary' });
+            const wsname = wb.SheetNames[0];
+            const rawData = XLSX.utils.sheet_to_json(wb.Sheets[wsname]);
+            
+            // Map the raw excel data to our preview state
+            const previewData = rawData.map((row, index) => {
+                // 🚨 THE FIX: Normalize all Excel headers (lowercase, remove spaces)
+                const cleanRow = {};
+                Object.keys(row).forEach(k => {
+                    const cleanKey = k.toLowerCase().replace(/[^a-z0-9]/g, "");
+                    cleanRow[cleanKey] = row[k];
+                });
+
+                return {
+                    _id: index, 
+                    selected: true, 
+                    // Safely grab the cleaned keys
+                    firstName: cleanRow.firstname || cleanRow.fname || cleanRow.first || '',
+                    lastName: cleanRow.lastname || cleanRow.lname || cleanRow.last || '',
+                    email: cleanRow.email || cleanRow.mail || cleanRow.emailaddress || '',
+                    mobile: cleanRow.mobile || cleanRow.mobileno || cleanRow.phone || '',
+                    secondaryEmail: cleanRow.secondaryemail || cleanRow.altemail || ''
+                };
+            });
+            
+            setImportPreviewData(previewData);
+            setImportDepartment(""); 
+            setShowImportPreview(true); 
+        };
+        reader.readAsBinaryString(file);
+        e.target.value = null; 
+    };
+
+    // 2. Submits ONLY the checked rows and the chosen Department to the backend
+    const submitBulkImport = async () => {
+        if (!importDepartment) {
+            showToast("Please select a target department", "error");
+            return;
+        }
+
+        const selectedUsers = importPreviewData.filter(r => r.selected);
+        if (selectedUsers.length === 0) return;
+
         setLoading(true);
+        setShowImportPreview(false);
+
         try {
-            const response = await bulkImport(formData);
-            setBulkReport(response.data.summary);
+            // Strip out the React '_id' and 'selected' flags before sending
+            const payloadData = selectedUsers.map(({_id, selected, ...rest}) => rest);
+            
+            // Encrypt standard JSON payload
+            const { payload } = await securePayload({
+                users: payloadData,
+                department: importDepartment
+            });
+
+            // Send JSON to backend
+            const response = await bulkImport({ payload }); 
+            
+            setBulkReport(response.data.summary || response.data);
             setBulkDialog(true);
             loadAllData();
+            loadStats();
         } catch (err) {
-            showToast(err.message, 'error');
+            console.error("Bulk Import Error:", err);
+            showToast(err.response?.data?.message || err.message || "Import failed", "error");
         } finally {
             setLoading(false);
-            e.target.value = null;
+            setImportPreviewData([]);
         }
     };
 
@@ -521,7 +619,8 @@ export default function Admin() {
                                     </div>
                                 )}
                             </div>
-                            <input type="file" ref={fileUploadRef} style={{ display: 'none' }} accept=".xlsx, .xls, .csv" onChange={handleBulkImport} />
+                           {/* Change onChange from handleBulkImport to handleFileSelect */}
+<input type="file" ref={fileUploadRef} style={{ display: 'none' }} accept=".xlsx, .xls, .csv" onChange={handleFileSelect} />
                         </>
                     )}
                 </div>
@@ -1052,6 +1151,99 @@ export default function Admin() {
                 {/* --- TO HERE --- */}
                 {renderPagination()}
             </div>
+
+            {/* Excel Import Preview Modal */}
+            <Modal
+                isOpen={showImportPreview}
+                onClose={() => setShowImportPreview(false)}
+                title="Review & Select Users"
+                maxWidth="max-w-4xl"
+            >
+                <div className="p-4 space-y-4">
+                    {/* Department Dropdown */}
+                    <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-xl border border-indigo-100 dark:border-indigo-800">
+                        <label className="block mb-2 text-xs font-bold text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                            Assign Target Department <span className="text-red-500">*</span>
+                        </label>
+                        <select 
+                            value={importDepartment} 
+                            onChange={(e) => setImportDepartment(e.target.value)}
+                            className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 outline-none"
+                        >
+                            <option value="">-- Select Department --</option>
+                            {ous.map(ou => (
+                                <option key={ou.value} value={ou.value}>{ou.label}</option>
+                            ))}
+                        </select>
+                    </div>
+
+                    {/* Data Verification Table */}
+                    <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-xl">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 z-10 shadow-sm border-b border-gray-200 dark:border-gray-700">
+                                <tr>
+                                    <th className="p-3 w-12 text-center">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={importPreviewData.length > 0 && importPreviewData.every(r => r.selected)}
+                                            onChange={(e) => {
+                                                const checked = e.target.checked;
+                                                setImportPreviewData(prev => prev.map(r => ({...r, selected: checked})));
+                                            }}
+                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                        />
+                                    </th>
+                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">First Name</th>
+                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Last Name</th>
+                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Email</th>
+                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Mobile</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                                {importPreviewData.map((row) => (
+                                    <tr key={row._id} className={row.selected ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900/50 opacity-50'}>
+                                        <td className="p-3 text-center">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={row.selected}
+                                                onChange={(e) => {
+                                                    const checked = e.target.checked;
+                                                    setImportPreviewData(prev => prev.map(r => r._id === row._id ? {...r, selected: checked} : r));
+                                                }}
+                                                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                                            />
+                                        </td>
+                                        <td className={`p-3 font-medium ${!row.firstName ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
+                                            {row.firstName || "MISSING"}
+                                        </td>
+                                        <td className="p-3 text-gray-800 dark:text-gray-200">{row.lastName}</td>
+                                        <td className={`p-3 ${!row.email ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
+                                            {row.email || "MISSING"}
+                                        </td>
+                                        <td className="p-3 text-gray-800 dark:text-gray-200">{row.mobile}</td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                        <button 
+                            onClick={() => setShowImportPreview(false)}
+                            className="px-6 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 font-bold text-sm hover:bg-gray-50 dark:hover:bg-gray-800 transition-all"
+                        >
+                            Cancel
+                        </button>
+                        <button 
+                            onClick={submitBulkImport}
+                            disabled={loading || !importDepartment || !importPreviewData.some(r => r.selected)}
+                            className="px-8 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm shadow-lg shadow-indigo-200 dark:shadow-none transition-all hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {loading ? "Importing..." : `Import ${importPreviewData.filter(r => r.selected).length} Users`}
+                        </button>
+                    </div>
+                </div>
+            </Modal>
 
             {/* Bulk Results Modal */}
             <Modal
