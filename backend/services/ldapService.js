@@ -43,13 +43,20 @@ exports.search = (client, base, options) => {
   });
 };
 
+
 // 4. THE FIX: The missing function that connects your DB to LDAP
-// 4. THE FIX: The missing function that connects your DB to LDAP
-exports.checkUserExists = async (username, settings) => {
-  const client = exports.createClient(settings.ldap_url);
+exports.checkUserExists = async (username, settings = {}) => {
+  // 🚨 SMART FALLBACKS: Handle both DB snake_case and Config camelCase
+  const ldapUrl = settings.ldap_url || settings.url || ldapConfig.url;
+  const bindDN = settings.bind_dn || settings.bindDN || ldapConfig.bindDN;
+  const bindPass = settings.password || settings.bindPassword || ldapConfig.bindPassword;
+  const baseDN = settings.base_dn || settings.baseDN || ldapConfig.baseDN;
+
+  const client = exports.createClient(ldapUrl);
 
   try {
-    await exports.bind(client, settings.bind_dn, settings.password);
+    // Now it will correctly find uid=admin,ou=system and your password!
+    await exports.bind(client, bindDN, bindPass);
 
     // 🚨 ADDED businessCategory and departmentNumber to attributes
     const searchOptions = {
@@ -61,7 +68,7 @@ exports.checkUserExists = async (username, settings) => {
       ],
     };
 
-    const entries = await exports.search(client, settings.base_dn, searchOptions);
+    const entries = await exports.search(client, baseDN, searchOptions);
 
     if (entries.length === 0) {
       return { userExists: false };

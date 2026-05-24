@@ -16,7 +16,7 @@ router.get('/users/:ou', dirController.getUsers);
 router.post('/add', uploadMemory.single('photo'), decryptPayload, dirController.addUser);
 router.put('/edit', uploadMemory.single('photo'), decryptPayload, dirController.editUser);
 
-router.delete('/delete/:uid', dirController.deleteUser);
+// router.delete('/delete/:uid', dirController.deleteUser);
 // Remove uploadMemory since we are sending JSON data now!
 router.post('/bulk', decryptPayload, dirController.bulkImport);
 

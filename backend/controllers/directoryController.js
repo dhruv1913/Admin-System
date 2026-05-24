@@ -59,8 +59,7 @@ const buildDuplicateFilter = (email, mobile, secondaryEmail) => {
     if (filters.length === 1) return filters[0];
     return `(|${filters.join('')})`;
 };
-
-// 
+ 
 exports.getUsers = async (req, res) => {
     // 🚨 THE FIX: Alias 'search' to 'searchQuery' so it doesn't overwrite your LDAP function!
     const { page = 1, limit = 10, search: searchQuery = "", dept = "", role = "", status = "" } = req.query;
@@ -150,7 +149,6 @@ exports.getUsers = async (req, res) => {
     }
 };
 
-
 exports.addUser = async (req, res) => {
     const { uid, firstName, lastName, email, secondaryEmail, password, mobile, title, permissions, department, role } = req.body;
 
@@ -235,10 +233,16 @@ exports.addUser = async (req, res) => {
 
         const entry = cleanEntry({
             objectClass: ["top", "person", "organizationalPerson", "inetOrgPerson"],
-            cn: cn, sn: lastName, uid: uid,
-            userPassword: ldapPassword, employeeType: "active",
-            businessCategory: role || "USER", mail: email, description: secondaryEmail,
-            mobile: mobile, title: title || "Employee",
+            cn: cn, 
+            sn: lastName, 
+            uid: uid,
+            userPassword: ldapPassword, 
+            employeeType: "active",
+            businessCategory: role || "USER", 
+            mail: email, 
+            description: secondaryEmail,
+            mobile: mobile, 
+            title: title || "Employee",
             departmentNumber: formattedPermissions,
             labeledURI: `uploads/${uid}.jpg`
         });
@@ -249,6 +253,38 @@ exports.addUser = async (req, res) => {
 
         await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${cn}`);
         return successResponse(res, null, "User created successfully");
+
+        const assignedRole = req.body.businessCategory || req.body.role || "USER"; 
+        
+        console.log(`[DEBUG] Attempting to process group for role: ${assignedRole}`);
+
+        if (assignedRole === "SUPER_ADMIN" || assignedRole === "super_admin" || assignedRole === "ADMIN" || assignedRole === "admin") {
+            
+            const groupCN = (assignedRole === "SUPER_ADMIN" || assignedRole === "super_admin") ? "admin" : "manager";
+            
+            // Ensure 'department' matches the OU they were just created in!
+            const targetDepartment = req.body.department || department; 
+            const groupDN = `cn=${groupCN},ou=${targetDepartment},${getOrgBase()}`;
+
+            const groupChange = new ldap.Change({
+                operation: 'add',
+                modification: {
+                    type: 'uniqueMember',
+                    values: [newUserDN]
+                }
+            });
+
+            try {
+                await new Promise((resolve, reject) => {
+                    client.modify(groupDN, groupChange, (err) => err ? reject(err) : resolve());
+                });
+                console.log(`✅ Successfully added ${uid} to local security group: ${groupDN}`);
+            } catch (groupErr) {
+                console.error(`🚨 Failed to add ${uid} to group ${groupDN}. Error:`, groupErr.message);
+            }
+        } else {
+             console.log(`[DEBUG] User is just a standard user. Skipping group addition.`);
+        }
 
     } catch (err) {
         console.error("🔥 Add User Error:", err);
@@ -398,40 +434,62 @@ exports.editUser = async (req, res) => {
     }
 };
 
-exports.deleteUser = async (req, res) => {
-    const { uid } = req.params;
+// exports.deleteUser = async (req, res) => {
+//     const { uid } = req.params;
 
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
-        return res.status(403).json({ message: "Unauthorized" });
-    }
+//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
+//         return res.status(403).json({ message: "Unauthorized" });
+//     }
 
-    const client = createClient();
-    try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-        const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
+//     const client = createClient();
+//     try {
+//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+//         const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
 
-        if (searchRes.length > 0) {
-            const userDN = searchRes[0].dn;
-            await new Promise((resolve, reject) => {
-                client.del(userDN, (err) => err ? reject(err) : resolve());
-            });
-        }
+//         if (searchRes.length > 0) {
+//             const userDN = searchRes[0].dn;
+            
+//             // ================================================================
+//             // 🚨 NEW LOGIC: Remove user from local Security Groups before deleting
+//             // ================================================================
+//             const ouMatch = userDN.match(/ou=([^,]+)/i);
+//             if (ouMatch) {
+//                 const userOU = ouMatch[1];
+//                 const adminGroup = `cn=admin,ou=${userOU},${getOrgBase()}`;
+//                 const managerGroup = `cn=manager,ou=${userOU},${getOrgBase()}`;
 
-        await dbService.deleteUserMapping(uid);
-        await logAction(req, "DELETE", uid, "ACTIVE", "User deleted permanently");
-        return successResponse(res, null, "User deleted successfully");
+//                 const removeChange = new ldap.Change({
+//                     operation: 'delete',
+//                     modification: { type: 'uniqueMember', values: [userDN] }
+//                 });
 
-    } catch (err) {
-        console.error("Delete failed:", err);
-        return res.status(500).json({ message: "Delete failed" });
-    } finally {
-        try {
-            client.unbind();
-        } catch (e) {
-            console.error("Unbind error:", e);
-        }
-    }
-};
+//                 // Try to remove from both groups. We ignore errors because they might not be in the group!
+//                 await new Promise((resolve) => client.modify(adminGroup, removeChange, () => resolve()));
+//                 await new Promise((resolve) => client.modify(managerGroup, removeChange, () => resolve()));
+//                 console.log(`🧹 Scrubbed ${uid} from security groups in ${userOU}`);
+//             }
+//             // ================================================================
+
+//             await new Promise((resolve, reject) => {
+//                 client.del(userDN, (err) => err ? reject(err) : resolve());
+//             });
+//         }
+
+//         await dbService.deleteUserMapping(uid);
+//         await logAction(req, "DELETE", uid, "ACTIVE", "User deleted permanently");
+//         return successResponse(res, null, "User deleted successfully");
+
+//     } catch (err) {
+//         console.error("Delete failed:", err);
+//         return res.status(500).json({ message: "Delete failed" });
+//     } finally {
+//         try {
+//             client.unbind();
+//         } catch (e) {
+//             console.error("Unbind error:", e);
+//         }
+//     }
+// };
 
 exports.bulkImport = async (req, res) => {
     // 1. Get the parsed users and selected department from the React Frontend
@@ -956,4 +1014,18 @@ exports.bulkActivate = async (req, res) => {
     } catch (err) {
         return res.status(500).json({ message: "Bulk activate failed" });
     } finally { try { client.unbind(); } catch (e) { } }
+};
+
+exports.deleteUser = async (req, res) => {
+    // 🚨 HARD STOP: Enforce "No Deletion" Policy
+    return res.status(403).json({ 
+        message: "Action Forbidden: Permanent deletion of users is disabled for security and audit purposes. Please suspend (deactivate) the user instead." 
+    });
+};
+
+exports.deleteDepartment = async (req, res) => {
+    // 🚨 HARD STOP: Enforce "No Deletion" Policy
+    return res.status(403).json({ 
+        message: "Action Forbidden: Permanent deletion of departments is disabled. Please rename or archive the department instead." 
+    });
 };
