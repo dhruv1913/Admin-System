@@ -343,9 +343,16 @@ export default function Admin() {
             await editUser(data);
             showToast(`${user.firstName} is now ${newStatus}`, 'success');
         } catch (err) {
-            const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message;
+            // Revert the toggle visually if it fails
             setUsers(prev => prev.map(u => u.uid === user.uid ? { ...u, status: currentStatus } : u));
-            showToast(errorMessage, 'error');
+            
+            // 🚨 Check for Security Block
+            if (err.response && err.response.status === 403) {
+                showToast("Security Blocked: You do not have permission to change this user's status.", 'error');
+            } else {
+                const errorMessage = err.response?.data?.message || err.response?.data?.error || err.message;
+                showToast(errorMessage, 'error');
+            }
         }
     };
 
@@ -437,10 +444,16 @@ export default function Admin() {
             } else {
                 throw new Error(response.data?.message || "Operation failed");
             }
-        } catch (err) {
+       } catch (err) {
             console.error("Save Error:", err);
-            const errorMsg = err.response?.data?.message || err.response?.data?.error || "Operation failed";
-            showToast(errorMsg, 'error');
+            
+            // 🚨 Check if the backend sent our specific Database Security Block message
+            if (err.response && err.response.status === 403) {
+                showToast("Security Blocked: You do not have permission to modify this user.", 'error');
+            } else {
+                const errorMsg = err.response?.data?.message || err.response?.data?.error || "Operation failed";
+                showToast(errorMsg, 'error');
+            }
         }
     };
 

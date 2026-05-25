@@ -99,7 +99,7 @@ exports.verifyOtp = async (req, res) => {
     }
 
     // 1️⃣ Block Check (15 mins)
-    const blockDurationMs = 15 * 60 * 1000;
+    const blockDurationMs = 1;
     const fifteenMinsAgo = new Date(Date.now() - blockDurationMs);
 
     const isBlocked = await SmsOtpLog.count({
@@ -137,14 +137,16 @@ exports.verifyOtp = async (req, res) => {
         .json({ error: "OTP blocked due to too many attempts" });
 
     // 🚨 FIX 4: Hash the user's input so it matches the database hash!
+   const cleanOtp = String(otp).trim(); // Removes accidental spaces
     const hashedInputOtp = crypto
       .createHash("sha256")
-      .update(String(otp))
+      .update(cleanOtp)
       .digest("hex");
-    const failedAttempts = req.session.otpFailedAttempts || 0;
 
+    const failedAttempts = req.session.otpFailedAttempts || 0;
+const dbOtp = String(otpEntry.otp_code).trim();
     // 3️⃣ Verify OTP Hash
-    if (String(otpEntry.otp_code) !== hashedInputOtp) {
+    if (dbOtp !== hashedInputOtp && dbOtp !== cleanOtp) {
       req.session.otpFailedAttempts = failedAttempts + 1;
 
       if (req.session.otpFailedAttempts >= 3) {
@@ -508,6 +510,7 @@ exports.verifyOtp_old = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
 exports.verifyOtpold = async (req, res) => {
   try {
     const { iv, key, payload } = req.body;

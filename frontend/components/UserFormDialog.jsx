@@ -16,6 +16,7 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
 
     const inputClasses = "w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 block p-2.5 transition-all outline-none";
     const labelClasses = "block mb-1 text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider";
+    const isSuperAdmin = currentUserRole === "SUPER_ADMIN" || currentUserRole === "super_admin";
 
     return (
         <Modal 
@@ -61,6 +62,7 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                 </div>
 
                 {/* Department */}
+                {isSuperAdmin && (
                 <div>
                     <label className={labelClasses}>Department</label>
                     <select 
@@ -76,6 +78,7 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                         ))}
                     </select>
                 </div>
+                )}
 
                 {/* Name Row */}
                 <div className="grid grid-cols-2 gap-4">

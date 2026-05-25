@@ -142,3 +142,21 @@ exports.getRecentAuditLogs = async () => {
     );
     return result;
 };
+
+exports.getUserCredentials = async (uid) => {
+    const result = await sequelize.query(
+        "SELECT ldap_user_dn, ldap_pwd FROM ldap_user_mapping WHERE ldap_uid = :uid",
+        {
+            replacements: { uid: uid },
+            type: sequelize.QueryTypes.SELECT
+        }
+    );
+
+    if (result.length > 0 && result[0].ldap_pwd) {
+        return {
+            dn: result[0].ldap_user_dn,
+            password: decryptDbPassword(result[0].ldap_pwd)
+        };
+    }
+    return null;
+};

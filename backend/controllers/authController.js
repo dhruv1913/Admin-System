@@ -69,7 +69,7 @@ exports.getCaptcha = (req, res) => {
 
 
 exports.login = async (req, res) => {
-  const { uid, captchaValue } = req.body || {};
+  const { uid, password, captchaValue } = req.body || {};
 
   // 1. Initial Validation
   if (!uid) return errorResponse(res, "Missing UID", 400);
@@ -81,31 +81,19 @@ exports.login = async (req, res) => {
   }
   req.session.captcha = null;
 
-  // Define adminClient outside try/catch so 'finally' can access it
   let adminClient;
+  let userClient;
 
   try {
-    // 2. Fetch password from Postgres
-    const storedPassword = await dbService.getStoredPassword(uid);
-    if (!storedPassword) {
-      return errorResponse(res, "User not found or inactive", 401);
-    }
+    // 2. Connect to LDAP using standard ENV variables (No ServiceLdapSetting needed!)
+    adminClient = createClient();
+    await bind(adminClient, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
-    // 3. Fetch LDAP Settings
-    const settings = await ServiceLdapSetting.findOne({
-      where: { service_id: 1 },
-    });
-    if (!settings) return errorResponse(res, "LDAP configuration missing", 500);
-
-    // 4. Connect as Admin
-    adminClient = createClient(settings.ldap_url);
-    await bind(adminClient, settings.bind_dn, settings.password);
-
-    // 5. Find User DN
-    const searchResult = await search(adminClient, settings.base_dn, {
+    // 3. Find User DN
+    const searchResult = await search(adminClient, process.env.LDAP_ORG_BASE || process.env.LDAP_BASE_DN, {
       scope: "sub",
       filter: `(uid=${uid})`,
-      attributes: ["dn", "businessCategory", "cn", "departmentNumber"],
+      attributes: ["dn", "businessCategory", "cn", "departmentNumber", "employeeType"],
     });
 
     if (searchResult.length === 0) {
@@ -114,25 +102,39 @@ exports.login = async (req, res) => {
 
     const userRecord = searchResult[0];
 
-    // 6. Attempt User Bind with Postgres Password
-    const userClient = createClient(settings.ldap_url);
+    // 4. Check if the account is suspended
+    const status = Array.isArray(userRecord.employeeType) ? userRecord.employeeType[0] : userRecord.employeeType;
+    if (status && String(status).toUpperCase() === "INACTIVE") {
+        return errorResponse(res, "Account is suspended. Please contact IT.", 403);
+    }
+
+    // 5. Get password for bind (Fallback to DB if frontend didn't send it)
+    let bindPassword = password;
+    if (!bindPassword) {
+        const creds = await dbService.getUserCredentials(uid);
+        if (!creds || !creds.password) {
+            return errorResponse(res, "Password required for login", 401);
+        }
+        bindPassword = creds.password;
+    }
+
+    // 6. Attempt User Bind (Verifies their password)
+    userClient = createClient();
     try {
       console.log(`🔑 Attempting user bind for: ${userRecord.dn}`);
-      await bind(userClient, userRecord.dn, storedPassword);
+      await bind(userClient, userRecord.dn, bindPassword);
       console.log("✅ User authentication successful");
     } catch (bindErr) {
       console.error("❌ User bind failed:", bindErr.message);
       return errorResponse(res, "Invalid Credentials", 401);
-    } finally {
-      userClient.unbind();
-    }
+    } 
 
-    // 7. Success Flow: Extract Roles & Names
+    // 7. Verify Role Authorization
     const role = Array.isArray(userRecord.businessCategory)
       ? userRecord.businessCategory[0]
       : userRecord.businessCategory || "USER";
 
-      if (role.toUpperCase() === "USER") {
+    if (role.toUpperCase() === "USER") {
         return errorResponse(res, "Access Denied: Standard users are not permitted to log in.", 403);
     }
 
@@ -140,6 +142,7 @@ exports.login = async (req, res) => {
       ? userRecord.cn[0]
       : userRecord.cn;
 
+    // 8. Extract Allowed OUs
     let allowedOUs = [];
     if (userRecord.departmentNumber) {
       const rules = Array.isArray(userRecord.departmentNumber)
@@ -151,19 +154,12 @@ exports.login = async (req, res) => {
       });
     }
 
-    // 8. Token & Redirect
+    // 9. Generate Token & Redirect
     const token = generateToken({ uid, role: role.toUpperCase(), allowedOUs });
-    const frontendUrl = process.env.FRONTEND_URL ;
+    const frontendUrl = process.env.FRONTEND_URL;
     const targetUrl = `${frontendUrl}/dashboard?token=${token}`;
 
-    await logAction(
-      req,
-      "LOGIN",
-      uid,
-      role,
-      "ACTIVE",
-      "Logged in via LDAP Bind",
-    );
+    await logAction(req, "LOGIN", uid, role, "ACTIVE", "Logged in via LDAP Bind");
 
     return res.status(200).json({
       success: true,
@@ -172,11 +168,13 @@ exports.login = async (req, res) => {
       redirectUrl: targetUrl,
       data: { token, role: role.toUpperCase(), name, redirectUrl: targetUrl },
     });
+
   } catch (err) {
     console.error("LOGIN ERROR:", err);
     return errorResponse(res, "Internal Server Error", 500);
   } finally {
-    if (adminClient) adminClient.unbind();
+    if (adminClient) try { adminClient.unbind(); } catch(e){}
+    if (userClient) try { userClient.unbind(); } catch(e){}
   }
 };
 

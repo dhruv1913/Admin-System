@@ -9,11 +9,67 @@ const crypto = require('crypto');
 const ldap = require('ldapjs');
 const { isRealImage, saveSecureImage } = require('../utils/fileValidator');
 
-
 // ==========================================
 // HELPER FUNCTIONS
 // ==========================================
 const getOrgBase = () => ldapConfig.baseDN || process.env.LDAP_ORG_BASE;
+
+// ==========================================
+// 🚨 NEW: Dynamic ACL Binder 
+// ==========================================
+// ==========================================
+// 🚨 NEW: Dynamic ACL Binder 
+// ==========================================
+// ==========================================
+// 🚨 STRICT DYNAMIC ACL BINDER
+// ==========================================
+// ==========================================
+// 🚨 STRICT DYNAMIC ACL BINDER (WITH OWNER BYPASS)
+// ==========================================
+const bindAsUser = async (client, req) => {
+    // 1. 👑 SUPER ADMIN BYPASS: Prevent the system owner from getting locked out
+    // Super Admins bypass ACLs anyway, so we use the Root Bind to prevent password sync issues.
+    if (req.user && (req.user.role === "SUPER_ADMIN" || req.user.role === "super_admin")) {
+        console.log(`[👑 SUPER ADMIN BIND] Connecting as Root Admin for ${req.user.uid}`);
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        return;
+    }
+
+    // 2. 🔐 STANDARD ADMINS: Strict Dynamic ACL Enforcement
+    if (req.user && req.user.uid) {
+        try {
+            // Step A: Grab their personal decrypted password from PostgreSQL
+            const userPassword = await dbService.getStoredPassword(req.user.uid);
+            
+            if (userPassword) {
+                // Step B: Briefly bind as Root ONLY to search for the user's exact DN path
+                await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+                const searchResult = await search(client, process.env.LDAP_ORG_BASE || process.env.LDAP_BASE_DN, {
+                    scope: 'sub',
+                    filter: `(uid=${req.user.uid})`,
+                    attributes: ['dn']
+                });
+
+                if (searchResult.length > 0) {
+                    const userDN = searchResult[0].dn;
+                    
+                    // 🚨 Step C: RE-BIND AS THE ACTUAL USER
+                    // This strips away "God Mode" and forces OpenLDAP to apply the Regex ACLs!
+                    console.log(`[🔐 STRICT ACL BIND] Switching LDAP connection to: ${userDN}`);
+                    await bind(client, userDN, userPassword);
+                    return; 
+                }
+            }
+        } catch (err) {
+            console.error(`[🚨 BIND FAILED] Could not dynamically bind as ${req.user.uid}:`, err.message);
+            throw new Error("LDAP Security Check Failed: Unable to verify your directory credentials.");
+        }
+    }
+    
+    // 3. Fallback (Only used if the system itself is booting up or making an automated request)
+    console.log(`[⚠️ FALLBACK BIND] Connecting as Root Admin`);
+    await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+};
 
 const generateSSHA = (password) => {
     const salt = crypto.randomBytes(4);
@@ -44,7 +100,6 @@ const cleanEntry = (entry) => {
 
 // Checks if the target OU is in the list of allowed OUs (case-insensitive, trimmed)
 const isAllowedOU = (allowedOUs, targetOU) => {
-
     if (!allowedOUs || !Array.isArray(allowedOUs) || !targetOU) return false;
     const isMatch = allowedOUs.map(ou => ou.trim().toLowerCase()).includes(targetOU.trim().toLowerCase());
     return isMatch;
@@ -173,7 +228,7 @@ exports.addUser = async (req, res) => {
         const exists = await dbService.checkUserExists(uid);
         if (exists) return res.status(400).json({ message: `UID '${uid}' already exists in database.` });
 
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
 
         const existingUid = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})` });
         if (existingUid.length > 0) return res.status(400).json({ message: `UID '${uid}' already exists in directory.` });
@@ -247,13 +302,16 @@ exports.addUser = async (req, res) => {
             labeledURI: `uploads/${uid}.jpg`
         });
 
+        // ==========================================
+        // ADD TO DIRECTORY FIRST
+        // ==========================================
         await new Promise((resolve, reject) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
         });
 
-        await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${cn}`);
-        return successResponse(res, null, "User created successfully");
-
+        // ================================================================
+        // 🚨 NEW LOGIC: Add the new user to their Local Security Group
+        // ================================================================
         const assignedRole = req.body.businessCategory || req.body.role || "USER"; 
         
         console.log(`[DEBUG] Attempting to process group for role: ${assignedRole}`);
@@ -286,8 +344,20 @@ exports.addUser = async (req, res) => {
              console.log(`[DEBUG] User is just a standard user. Skipping group addition.`);
         }
 
+        // ==========================================
+        // FINALLY: Log Action and Return Success
+        // ==========================================
+        await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${cn}`);
+        return successResponse(res, null, "User created successfully");
+
     } catch (err) {
-        console.error("🔥 Add User Error:", err);
+        console.error("🔥 Operation Error:", err);
+        
+        // 🚨 CATCH THE ACL BLOCK
+        if (err.code === 50) {
+            return res.status(403).json({ message: "Database Security Blocked this Action: Insufficient Access Rights." });
+        }
+        
         return res.status(500).json({ message: "Server Error" });
     } finally {
         try { client.unbind(); } catch (e) { }
@@ -320,7 +390,7 @@ exports.editUser = async (req, res) => {
             saveSecureImage(req.file.buffer, uid);
         }
 
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
 
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
         if (users.length === 0) return res.status(404).json({ message: "User not found" });
@@ -427,69 +497,18 @@ exports.editUser = async (req, res) => {
         return successResponse(res, { uid }, actionMsg);
 
     } catch (err) {
-        console.error("Edit Error:", err);
-        return res.status(500).json({ message: "Update failed" });
+        console.error("🔥 Operation Error:", err);
+        
+        // 🚨 CATCH THE ACL BLOCK
+        if (err.code === 50) {
+            return res.status(403).json({ message: "Database Security Blocked this Action: Insufficient Access Rights." });
+        }
+        
+        return res.status(500).json({ message: "Server Error" });
     } finally {
         try { client.unbind(); } catch (e) { }
     }
 };
-
-// exports.deleteUser = async (req, res) => {
-//     const { uid } = req.params;
-
-//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN" && !req.user.canWrite) {
-//         return res.status(403).json({ message: "Unauthorized" });
-//     }
-
-//     const client = createClient();
-//     try {
-//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-//         const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
-
-//         if (searchRes.length > 0) {
-//             const userDN = searchRes[0].dn;
-            
-//             // ================================================================
-//             // 🚨 NEW LOGIC: Remove user from local Security Groups before deleting
-//             // ================================================================
-//             const ouMatch = userDN.match(/ou=([^,]+)/i);
-//             if (ouMatch) {
-//                 const userOU = ouMatch[1];
-//                 const adminGroup = `cn=admin,ou=${userOU},${getOrgBase()}`;
-//                 const managerGroup = `cn=manager,ou=${userOU},${getOrgBase()}`;
-
-//                 const removeChange = new ldap.Change({
-//                     operation: 'delete',
-//                     modification: { type: 'uniqueMember', values: [userDN] }
-//                 });
-
-//                 // Try to remove from both groups. We ignore errors because they might not be in the group!
-//                 await new Promise((resolve) => client.modify(adminGroup, removeChange, () => resolve()));
-//                 await new Promise((resolve) => client.modify(managerGroup, removeChange, () => resolve()));
-//                 console.log(`🧹 Scrubbed ${uid} from security groups in ${userOU}`);
-//             }
-//             // ================================================================
-
-//             await new Promise((resolve, reject) => {
-//                 client.del(userDN, (err) => err ? reject(err) : resolve());
-//             });
-//         }
-
-//         await dbService.deleteUserMapping(uid);
-//         await logAction(req, "DELETE", uid, "ACTIVE", "User deleted permanently");
-//         return successResponse(res, null, "User deleted successfully");
-
-//     } catch (err) {
-//         console.error("Delete failed:", err);
-//         return res.status(500).json({ message: "Delete failed" });
-//     } finally {
-//         try {
-//             client.unbind();
-//         } catch (e) {
-//             console.error("Unbind error:", e);
-//         }
-//     }
-// };
 
 exports.bulkImport = async (req, res) => {
     // 1. Get the parsed users and selected department from the React Frontend
@@ -500,7 +519,7 @@ exports.bulkImport = async (req, res) => {
 
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
 
         const summary = { success: 0, failed: 0, errors: [] };
 
@@ -546,7 +565,6 @@ exports.bulkImport = async (req, res) => {
             return Array.from({length: 12}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
         };
 
-        // 3. Process each user from the frontend array
         // 3. Process each user from the frontend array
         for (let i = 0; i < users.length; i++) {
             const user = users[i];
@@ -645,7 +663,7 @@ exports.exportUsers = async (req, res) => {
 
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+       await bindAsUser(client, req);
 
         // 🚨 UPDATE: Added "description" (secondary email) to attributes to fetch
         const users = await search(client, getOrgBase(), {
@@ -710,7 +728,7 @@ exports.exportUsers = async (req, res) => {
 exports.getOUs = async (req, res) => {
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
 
         const entries = await search(client, getOrgBase(), { scope: "one", filter: "(objectClass=organizationalUnit)", attributes: ["ou"] });
 
@@ -737,7 +755,7 @@ exports.getDepartmentsStats = async (req, res) => {
 
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+       await bindAsUser(client, req);
 
         // Fetch all OUs
         const entries = await search(client, getOrgBase(), { scope: "one", filter: "(objectClass=organizationalUnit)", attributes: ["ou"] });
@@ -791,7 +809,7 @@ exports.createDepartment = async (req, res) => {
 
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
         const newDN = `ou=${cleanName},${getOrgBase()}`;
         const entry = { objectClass: ["top", "organizationalUnit"], ou: cleanName };
 
@@ -811,83 +829,6 @@ exports.createDepartment = async (req, res) => {
         try { client.unbind(); } catch (e) { }
     }
 };
-
-// exports.deleteDepartment = async (req, res) => {
-//     // 🚨 FIX: Allow admins to delete OUs
-//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
-//         return res.status(403).json({ message: "Unauthorized" });
-//     }
-
-//     // 🚨 AGGRESSIVE CATCH: Look everywhere for the variables
-//     const name = req.body.name || req.body.ouName || req.params.name || req.query.name || req.query.ouName;
-
-
-//     let providedDn = req.body.dn || req.query.dn;
-//     if (providedDn === "undefined" || providedDn === "null") providedDn = null;
-
-//     if (!name && !providedDn) {
-//         return res.status(400).json({ message: "Department name or DN is required" });
-//     }
-
-//     const client = createClient();
-//     try {
-//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-
-//         // 🚨 THE FIX: Use the exact provided DN. If it's missing, rebuild it using the root base.
-//         const targetDn = providedDn ? providedDn : `ou=${name},${getOrgBase()}`;
-
-//         console.log(`🗑️ Attempting to delete exact DN: ${targetDn}`);
-
-//         // Ensure OU is empty before deleting
-//         const users = await search(client, targetDn, { scope: "one", filter: "(objectClass=*)" });
-//         if (users.length > 0) {
-//             return res.status(400).json({ message: "Cannot delete: Department contains users or nested OUs" });
-//         }
-
-//         // Delete the OU
-//         await new Promise((resolve, reject) => {
-//             client.del(targetDn, (err) => err ? reject(err) : resolve());
-//         });
-
-//         await logAction(req, "DELETE_OU", req.user?.uid || "Admin", "INACTIVE", `Deleted Department: ${targetDn}`);
-//         return successResponse(res, null, "Department deleted");
-
-//     } catch (err) {
-//         console.error("🚨 LDAP Delete OU Error:", err.message);
-//         return res.status(500).json({ message: "Delete failed: " + err.message });
-//     } finally {
-//         try { client.unbind(); } catch (e) { }
-//     }
-// };
-
-// exports.bulkDelete = async (req, res) => {
-//     const { uids } = req.body;
-//     if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
-
-//     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
-//         return res.status(403).json({ message: "Unauthorized" });
-//     }
-
-//     const client = createClient();
-//     let deleted = 0;
-//     try {
-//         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-//         for (const uid of uids) {
-//             try {
-//                 const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
-//                 if (searchRes.length > 0) {
-//                     await new Promise((resolve, reject) => client.del(searchRes[0].dn, (err) => err ? reject(err) : resolve()));
-//                     await dbService.deleteUserMapping(uid);
-//                     deleted++;
-//                 }
-//             } catch (e) { console.error(`Failed to delete ${uid}`, e); }
-//         }
-//         await logAction(req, "BULK_DELETE", req.user?.uid || "Admin", "ACTIVE", `Bulk deleted ${deleted} users`);
-//         return successResponse(res, null, `Successfully deleted ${deleted} users`);
-//     } catch (err) {
-//         return res.status(500).json({ message: "Bulk delete failed" });
-//     } finally { try { client.unbind(); } catch (e) { } }
-// };
 
 exports.editDepartment = async (req, res) => {
     // 1. Security Check: Only Admins/Super Admins
@@ -910,7 +851,7 @@ exports.editDepartment = async (req, res) => {
 
     const client = createClient();
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
 
         // In LDAP, renaming a folder means modifying its "Distinguished Name" (DN)
         const oldDN = `ou=${cleanOldName},${getOrgBase()}`;
@@ -949,7 +890,7 @@ exports.bulkSuspend = async (req, res) => {
     const client = createClient();
     let suspended = 0;
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
         for (const uid of uids) {
             try {
                 const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
@@ -993,7 +934,7 @@ exports.bulkActivate = async (req, res) => {
     const client = createClient();
     let activated = 0;
     try {
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        await bindAsUser(client, req);
         for (const uid of uids) {
             try {
                 const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
