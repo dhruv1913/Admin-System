@@ -880,37 +880,6 @@ exports.editDepartment = async (req, res) => {
 };
 
 exports.bulkSuspend = async (req, res) => {
-    const { uids } = req.body;
-    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
-
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
-        return res.status(403).json({ message: "Unauthorized" });
-    }
-
-    const client = createClient();
-    let suspended = 0;
-    try {
-        await bindAsUser(client, req);
-        for (const uid of uids) {
-            try {
-                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
-                if (searchRes.length > 0) {
-                    const userDN = searchRes[0].dn;
-                    await dbService.updateUserStatus(uid, false);
-
-                    await new Promise((resolve, reject) => {
-                        const change = new ldap.Change({ operation: 'replace', modification: { type: 'employeeType', values: ['INACTIVE'] } });
-                        client.modify(userDN, change, (err) => err ? reject(err) : resolve());
-                    });
-                    suspended++;
-                }
-            } catch (e) { console.error(`Failed to suspend ${uid}`, e); }
-        }
-        await logAction(req, "BULK_SUSPEND", req.user?.uid || "Admin", "INACTIVE", `Bulk suspended ${suspended} users`);
-        return successResponse(res, null, `Successfully suspended ${suspended} users`);
-    } catch (err) {
-        return res.status(500).json({ message: "Bulk suspend failed" });
-    } finally { try { client.unbind(); } catch (e) { } }
 };
 
 exports.getSessionLogs = async (req, res) => {
@@ -924,37 +893,6 @@ exports.getAuditLogs = async (req, res) => {
 };
 
 exports.bulkActivate = async (req, res) => {
-    const { uids } = req.body;
-    if (!uids || !Array.isArray(uids) || uids.length === 0) return res.status(400).json({ message: "No UIDs provided" });
-
-    if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && !req.user.canWrite) {
-        return res.status(403).json({ message: "Unauthorized" });
-    }
-
-    const client = createClient();
-    let activated = 0;
-    try {
-        await bindAsUser(client, req);
-        for (const uid of uids) {
-            try {
-                const searchRes = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ['dn'] });
-                if (searchRes.length > 0) {
-                    const userDN = searchRes[0].dn;
-                    await dbService.updateUserStatus(uid, true);
-
-                    await new Promise((resolve, reject) => {
-                        const change = new ldap.Change({ operation: 'replace', modification: { type: 'employeeType', values: ['ACTIVE'] } });
-                        client.modify(userDN, change, (err) => err ? reject(err) : resolve());
-                    });
-                    activated++;
-                }
-            } catch (e) { console.error(`Failed to activate ${uid}`, e); }
-        }
-        await logAction(req, "BULK_ACTIVATE", req.user?.uid || "Admin", "ACTIVE", `Bulk activated ${activated} users`);
-        return successResponse(res, null, `Successfully activated ${activated} users`);
-    } catch (err) {
-        return res.status(500).json({ message: "Bulk activate failed" });
-    } finally { try { client.unbind(); } catch (e) { } }
 };
 
 exports.deleteUser = async (req, res) => {
