@@ -9,7 +9,7 @@ export const useAuth = () => useContext(AuthContext);
 export const AuthProvider = ({ children }) => {
     const [auth, setAuth] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [fatalError, setFatalError] = useState(null); // 🚨 THE CIRCUIT BREAKER
+    const [fatalError, setFatalError] = useState(null); 
 
     const SSO_API_URL = import.meta.env.VITE_SSO_API_URL;
     const SERVICE_KEY = import.meta.env.VITE_SERVICE_KEY;
@@ -22,14 +22,13 @@ export const AuthProvider = ({ children }) => {
 
         const verifySession = async () => {
             try {
-                // 🚨 FIX: Ensure your custom apiClient sends cookies too!
                 apiClient.defaults.withCredentials = true; 
                 axios.defaults.withCredentials = true; 
 
                 try {
                     const csrfRes = await axios.get(`${import.meta.env.VITE_API_URL}/api/csrf-token`);
                     
-                    // 🚨 FIX: Attach the token to the apiClient so adminService.js can use it!
+                    //  Attach the token to the apiClient so adminService.js can use it!
                     apiClient.defaults.headers.common['X-CSRF-Token'] = csrfRes.data.csrfToken;
                     
                     // (Optional) Keep this just in case you use global axios anywhere else
@@ -72,7 +71,7 @@ export const AuthProvider = ({ children }) => {
                     
                     // 🚨 THE FIX: The parsed object IS the data! Let's safely fall back.
                     let userData = parsed.data || parsed; 
-                    console.log("User data loaded successfully:", userData);
+                    
 
                     if (isMounted) {
                         setAuth({
@@ -135,7 +134,7 @@ export const AuthProvider = ({ children }) => {
             });
 
             window.history.replaceState({}, document.title, "/");
-            window.location.replace(SSO_PORTAL_URL || "http://localhost:3000");
+            window.location.replace(SSO_PORTAL_URL);
         }
     };
 

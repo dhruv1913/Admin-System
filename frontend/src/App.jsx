@@ -1,22 +1,23 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom"; 
+
 // Auth Provider & Guards
 import { AuthProvider, useAuth } from "./context/AuthContext";
+// Adjust these import paths if your folder structure is slightly different
 import ProtectedRoute from "../components/ProtectedRoute";
-
+import DashboardLayout from "../components/DashboardLayout";
 
 // Pages
+import Unauthorized from './pages/Unauthorized';
 import Admin from "./pages/admin";
 import Departments from "./pages/Departments";
 import Logs from "./pages/logs";
-import DashboardLayout from "../components/DashboardLayout";
 
 // 🚨 THE FIX: A Smart Login Redirector
-// If the user hits /login but is already authenticated, send them to the dashboard.
+// If the user hits / or /login but is already authenticated, send them to the dashboard.
 // If they aren't authenticated, send them to the SSO Portal.
 const LoginRedirector = () => {
     const { auth, loading, SSO_PORTAL_URL } = useAuth();
-
 
     if (loading) {
         return (
@@ -39,12 +40,14 @@ export default function App() {
     <AuthProvider>
         <div className="bg-gray-50 min-h-screen">
             <Routes>
-                {/* 🚨 THE FIX: Point root and login to the smart redirector */}
+                {/* Public / Redirect Routes */}
                 <Route path="/" element={<LoginRedirector />} />
                 <Route path="/login" element={<LoginRedirector />} />
+                <Route path="/unauthorized" element={<Unauthorized />} />
                 
+                {/* Protected Admin Routes */}
                 <Route path="/dashboard" element={
-                    <ProtectedRoute>
+                    <ProtectedRoute allowedRoles={['ADMIN', 'SUPER_ADMIN', 'admin', 'super_admin']}>
                         <DashboardLayout title="Dashboard" subtitle="Overview">
                             <Admin /> 
                         </DashboardLayout>
@@ -52,21 +55,23 @@ export default function App() {
                 } />
 
                 <Route path="/departments" element={
-                    <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN']}>
+                    <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'ADMIN', 'super_admin', 'admin']}>
                         <DashboardLayout title="Manage Departments" subtitle="Organization Structure">
                             <Departments />
                         </DashboardLayout>
                     </ProtectedRoute>
                 } />
 
+                {/* Only Super Admins can see the Logs */}
                 <Route path="/logs" element={
-                    <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+                    <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'super_admin']}>
                         <DashboardLayout title="System Logs" subtitle="Audit Trail">
                             <Logs />
                         </DashboardLayout>
                     </ProtectedRoute>
                 } />
                 
+                {/* Catch-All Route: Send anywhere else back to the start */}
                 <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
         </div>

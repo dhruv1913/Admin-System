@@ -14,18 +14,6 @@ const { isRealImage, saveSecureImage } = require('../utils/fileValidator');
 // ==========================================
 const getOrgBase = () => ldapConfig.baseDN || process.env.LDAP_ORG_BASE;
 
-// ==========================================
-// 🚨 NEW: Dynamic ACL Binder 
-// ==========================================
-// ==========================================
-// 🚨 NEW: Dynamic ACL Binder 
-// ==========================================
-// ==========================================
-// 🚨 STRICT DYNAMIC ACL BINDER
-// ==========================================
-// ==========================================
-// 🚨 STRICT DYNAMIC ACL BINDER (WITH OWNER BYPASS)
-// ==========================================
 const bindAsUser = async (client, req) => {
     // 1. 👑 SUPER ADMIN BYPASS: Prevent the system owner from getting locked out
     // Super Admins bypass ACLs anyway, so we use the Root Bind to prevent password sync issues.
@@ -71,6 +59,21 @@ const bindAsUser = async (client, req) => {
     await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 };
 
+// 🚨 NEW HELPER: Scans the array for the specific "secondaryMail." tag
+const parseSecondaryEmail = (desc) => {
+    if (!desc) return "";
+    // If it's an array (multiple descriptions)
+    if (Array.isArray(desc)) {
+        const found = desc.find(d => d && d.toLowerCase().startsWith("secondarymail."));
+        return found ? found.substring(14) : ""; // Removes "secondaryMail."
+    }
+    // If it's a single string
+    if (typeof desc === 'string' && desc.toLowerCase().startsWith("secondarymail.")) {
+        return desc.substring(14);
+    }
+    return "";
+};
+
 const generateSSHA = (password) => {
     const salt = crypto.randomBytes(4);
     const hash = crypto.createHash('sha1');
@@ -109,35 +112,31 @@ const buildDuplicateFilter = (email, mobile, secondaryEmail) => {
     let filters = [];
     if (email) filters.push(`(mail=${email})`);
     if (mobile) filters.push(`(mobile=${mobile})`);
-    if (secondaryEmail) filters.push(`(description=${secondaryEmail})`);
+    if (secondaryEmail) filters.push(`(description=secondaryMail.${secondaryEmail})`); 
     if (filters.length === 0) return null;
     if (filters.length === 1) return filters[0];
     return `(|${filters.join('')})`;
 };
  
 exports.getUsers = async (req, res) => {
-    // 🚨 THE FIX: Alias 'search' to 'searchQuery' so it doesn't overwrite your LDAP function!
     const { page = 1, limit = 10, search: searchQuery = "", dept = "", role = "", status = "" } = req.query;
 
     const client = createClient();
     try {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
-        // 2. Build a highly efficient LDAP Filter using 'searchQuery'
         let baseFilter = "(objectClass=inetOrgPerson)";
         if (searchQuery) {
             const q = searchQuery.trim();
             baseFilter = `(&(objectClass=inetOrgPerson)(|(cn=*${q}*)(uid=*${q}*)(mail=*${q}*)(mobile=*${q}*)(description=*${q}*)))`;
         }
 
-        // 3. Now the imported 'search' function works perfectly again!
         const users = await search(client, getOrgBase(), {
             scope: "sub",
             filter: baseFilter,
             attributes: ["uid", "cn", "sn", "mail", "description", "mobile", "businessCategory", "employeeType", "departmentNumber", "createTimestamp", "labeledURI"]
         });
 
-        // 4. Format the data 
         let processedUsers = users.map(u => {
             const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
             const rawCn = Array.isArray(u.cn) ? u.cn[0] : (u.cn || "Unknown");
@@ -162,13 +161,13 @@ exports.getUsers = async (req, res) => {
                 uid: Array.isArray(u.uid) ? u.uid[0] : u.uid,
                 email: Array.isArray(u.mail) ? u.mail[0] : u.mail,
                 mobile: Array.isArray(u.mobile) ? u.mobile[0] : (u.mobile || ""),
-                secondaryEmail: Array.isArray(u.description) ? u.description[0] : (u.description || ""),
+                // 🚨 Apply parser. Pass the whole description object/array to the parser.
+                secondaryEmail: parseSecondaryEmail(u.description),
                 labeledURI: Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || ""),
                 createTimestamp: u.createTimestamp || "00000000000000Z"
             };
         });
 
-        // Apply strict Backend filters
         if (dept) {
             const deptArray = dept.split(',').map(d => d.trim().toLowerCase());
             processedUsers = processedUsers.filter(u => deptArray.includes(String(u.department).toLowerCase()));
@@ -180,16 +179,13 @@ exports.getUsers = async (req, res) => {
             processedUsers = processedUsers.filter(u => isAllowedOU(req.user.allowedOUs, u.department));
         }
 
-        // Sort by newest
         processedUsers.sort((a, b) => (a.createTimestamp < b.createTimestamp ? 1 : -1));
 
-        // Slice exactly the records the frontend needs
         const totalRecords = processedUsers.length;
         const totalPages = Math.ceil(totalRecords / limit) || 1;
         const startIndex = (page - 1) * limit;
         const paginatedData = processedUsers.slice(startIndex, startIndex + Number(limit));
 
-        // Return the new structured payload
         return successResponse(res, {
             users: paginatedData,
             totalRecords,
@@ -209,7 +205,6 @@ exports.addUser = async (req, res) => {
 
     if (!uid || !department || !password) return res.status(400).json({ message: "Missing fields" });
 
-    // 🚨 1. STRICT MOBILE VALIDATION (Cleaned and Cast to String)
     if (mobile && String(mobile).trim() !== "") {
         const cleanMobile = String(mobile).trim();
         if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
@@ -228,12 +223,11 @@ exports.addUser = async (req, res) => {
         const exists = await dbService.checkUserExists(uid);
         if (exists) return res.status(400).json({ message: `UID '${uid}' already exists in database.` });
 
-        await bindAsUser(client, req);
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const existingUid = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})` });
         if (existingUid.length > 0) return res.status(400).json({ message: `UID '${uid}' already exists in directory.` });
 
-        // 🚨 2. GRANULAR DUPLICATE CHECK (Checks ONLY in the same Department)
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter) {
             const duplicates = await search(client, `ou=${department},${getOrgBase()}`, {
@@ -245,7 +239,9 @@ exports.addUser = async (req, res) => {
                     const dupUid = String(Array.isArray(dup.uid) ? dup.uid[0] : dup.uid || "").trim();
                     const dupMail = String(Array.isArray(dup.mail) ? dup.mail[0] : dup.mail || "").trim().toLowerCase();
                     const dupMobile = String(Array.isArray(dup.mobile) ? dup.mobile[0] : dup.mobile || "").trim();
-                    const dupSec = String(Array.isArray(dup.description) ? dup.description[0] : dup.description || "").trim().toLowerCase();
+                    
+                    // 🚨 Apply parser to the array!
+                    const dupSec = parseSecondaryEmail(dup.description).toLowerCase();
 
                     const reqEmail = String(email || "").trim().toLowerCase();
                     const reqMobile = String(mobile || "").trim();
@@ -264,7 +260,6 @@ exports.addUser = async (req, res) => {
             }
         }
 
-        // 🚨 3. NAME DUPLICATE CHECK
         const cn = `${firstName} ${lastName}`.trim();
         const nameDuplicates = await search(client, `ou=${department},${getOrgBase()}`, { scope: "sub", filter: `(cn=${cn})`, attributes: ['uid'] });
         if (nameDuplicates.length > 0) {
@@ -272,7 +267,6 @@ exports.addUser = async (req, res) => {
             return res.status(400).json({ message: `The name '${cn}' is already used by user '${dupUid}' in this department.` });
         }
 
-        // If all validations pass, Create User
         const newUserDN = `uid=${uid},ou=${department},${getOrgBase()}`;
         const userIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
 
@@ -286,6 +280,12 @@ exports.addUser = async (req, res) => {
             formattedPermissions = permissions.split(',').map(s => "ALLOW:" + s.trim());
         }
 
+        // 🚨 BUILD DESCRIPTION AS AN ARRAY FOR MULTI-VALUED LDAP ATTRIBUTE
+        const descArray = [`${department} Department`];
+        if (secondaryEmail) {
+            descArray.push(`secondaryMail.${secondaryEmail}`);
+        }
+
         const entry = cleanEntry({
             objectClass: ["top", "person", "organizationalPerson", "inetOrgPerson"],
             cn: cn, 
@@ -295,69 +295,22 @@ exports.addUser = async (req, res) => {
             employeeType: "active",
             businessCategory: role || "USER", 
             mail: email, 
-            description: secondaryEmail,
+            description: descArray, // 🚨 Pass the array directly!
             mobile: mobile, 
             title: title || "Employee",
             departmentNumber: formattedPermissions,
             labeledURI: `uploads/${uid}.jpg`
         });
 
-        // ==========================================
-        // ADD TO DIRECTORY FIRST
-        // ==========================================
         await new Promise((resolve, reject) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
         });
 
-        // ================================================================
-        // 🚨 NEW LOGIC: Add the new user to their Local Security Group
-        // ================================================================
-        const assignedRole = req.body.businessCategory || req.body.role || "USER"; 
-        
-        console.log(`[DEBUG] Attempting to process group for role: ${assignedRole}`);
-
-        if (assignedRole === "SUPER_ADMIN" || assignedRole === "super_admin" || assignedRole === "ADMIN" || assignedRole === "admin") {
-            
-            const groupCN = (assignedRole === "SUPER_ADMIN" || assignedRole === "super_admin") ? "admin" : "manager";
-            
-            // Ensure 'department' matches the OU they were just created in!
-            const targetDepartment = req.body.department || department; 
-            const groupDN = `cn=${groupCN},ou=${targetDepartment},${getOrgBase()}`;
-
-            const groupChange = new ldap.Change({
-                operation: 'add',
-                modification: {
-                    type: 'uniqueMember',
-                    values: [newUserDN]
-                }
-            });
-
-            try {
-                await new Promise((resolve, reject) => {
-                    client.modify(groupDN, groupChange, (err) => err ? reject(err) : resolve());
-                });
-                console.log(`✅ Successfully added ${uid} to local security group: ${groupDN}`);
-            } catch (groupErr) {
-                console.error(`🚨 Failed to add ${uid} to group ${groupDN}. Error:`, groupErr.message);
-            }
-        } else {
-             console.log(`[DEBUG] User is just a standard user. Skipping group addition.`);
-        }
-
-        // ==========================================
-        // FINALLY: Log Action and Return Success
-        // ==========================================
         await logAction(req, "CREATE", uid, role, "ACTIVE", `Created user ${cn}`);
         return successResponse(res, null, "User created successfully");
 
     } catch (err) {
-        console.error("🔥 Operation Error:", err);
-        
-        // 🚨 CATCH THE ACL BLOCK
-        if (err.code === 50) {
-            return res.status(403).json({ message: "Database Security Blocked this Action: Insufficient Access Rights." });
-        }
-        
+        console.error("🔥 Add User Error:", err);
         return res.status(500).json({ message: "Server Error" });
     } finally {
         try { client.unbind(); } catch (e) { }
@@ -368,7 +321,6 @@ exports.editUser = async (req, res) => {
     const { uid, firstName, lastName, email, secondaryEmail, title, mobile, employeeType, permissions, role, password } = req.body;
     if (!uid) return res.status(400).json({ message: "UID required" });
 
-    // 🚨 1. STRICT MOBILE VALIDATION FOR EDITING
     if (mobile && String(mobile).trim() !== "") {
         const cleanMobile = String(mobile).trim();
         if (!/^[6-9]\d{9}$/.test(cleanMobile)) {
@@ -378,19 +330,14 @@ exports.editUser = async (req, res) => {
 
     const client = createClient();
     try {
-
         if (req.file) {
-            // 1. Check the binary Magic Numbers
             if (!isRealImage(req.file.buffer)) {
-                return res.status(403).json({
-                    message: "🚨 Fake image detected! Only real PNG/JPG files are allowed."
-                });
+                return res.status(403).json({ message: "🚨 Fake image detected! Only real PNG/JPG files are allowed." });
             }
-            // 2. It's a real image! Save it safely to the disk
             saveSecureImage(req.file.buffer, uid);
         }
 
-        await bindAsUser(client, req);
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
         if (users.length === 0) return res.status(404).json({ message: "User not found" });
@@ -405,14 +352,12 @@ exports.editUser = async (req, res) => {
             }
         }
 
-        // 🚨 2. GRANULAR DUPLICATE CHECK FOR EDITING
         const dupFilter = buildDuplicateFilter(email, mobile, secondaryEmail);
         if (dupFilter && currentOU) {
             const duplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, {
                 scope: "sub", filter: dupFilter, attributes: ['uid', 'mail', 'mobile', 'description']
             });
 
-            // Filter out the user we are currently editing
             const conflicts = duplicates.filter(u => {
                 const uID = Array.isArray(u.uid) ? u.uid[0] : u.uid;
                 return String(uID).trim() !== String(uid).trim();
@@ -423,7 +368,9 @@ exports.editUser = async (req, res) => {
                     const dupUid = String(Array.isArray(dup.uid) ? dup.uid[0] : dup.uid || "").trim();
                     const dupMail = String(Array.isArray(dup.mail) ? dup.mail[0] : dup.mail || "").trim().toLowerCase();
                     const dupMobile = String(Array.isArray(dup.mobile) ? dup.mobile[0] : dup.mobile || "").trim();
-                    const dupSec = String(Array.isArray(dup.description) ? dup.description[0] : dup.description || "").trim().toLowerCase();
+                    
+                    // 🚨 Apply parser to the array!
+                    const dupSec = parseSecondaryEmail(dup.description).toLowerCase();
 
                     const reqEmail = String(email || "").trim().toLowerCase();
                     const reqMobile = String(mobile || "").trim();
@@ -442,7 +389,6 @@ exports.editUser = async (req, res) => {
             }
         }
 
-        // 🚨 3. NAME DUPLICATE CHECK FOR EDITING
         if (firstName && lastName) {
             const cn = `${firstName} ${lastName}`.trim();
             const nameDuplicates = await search(client, `ou=${currentOU},${getOrgBase()}`, { scope: "sub", filter: `(&(cn=${cn})(!(uid=${uid})))`, attributes: ['uid'] });
@@ -466,9 +412,16 @@ exports.editUser = async (req, res) => {
             await dbService.updateUserStatus(uid, (String(typeStr).toLowerCase() === "active"));
         }
 
+        // 🚨 BUILD DESCRIPTION AS AN ARRAY FOR MULTI-VALUED LDAP ATTRIBUTE
+        const descArray = [`${currentOU} Department`];
+        if (secondaryEmail) {
+            descArray.push(`secondaryMail.${secondaryEmail}`);
+        }
+
         const changes = cleanEntry({
             cn: (firstName && lastName) ? `${firstName} ${lastName}` : undefined,
-            sn: lastName, mail: email, description: secondaryEmail,
+            sn: lastName, mail: email, 
+            description: descArray, // 🚨 Pass the array directly!
             title: title, mobile: mobile, employeeType: employeeType,
             businessCategory: role, departmentNumber: permissions,
             labeledURI: req.file ? `uploads/${uid}.jpg` : undefined
@@ -477,14 +430,14 @@ exports.editUser = async (req, res) => {
         for (const [key, value] of Object.entries(changes)) {
             try {
                 await new Promise((resolve, reject) => {
-                    const change = new ldap.Change({ operation: 'replace', modification: { type: key, values: [String(value)] } });
+                    const change = new ldap.Change({ operation: 'replace', modification: { type: key, values: Array.isArray(value) ? value : [String(value)] } });
                     client.modify(userDN, change, (err) => err ? reject(err) : resolve());
                 });
             } catch (e) {
                 if (e.code === 16 || e.code === 32 || (e.message && e.message.includes("NoSuchAttribute"))) {
                     try {
                         await new Promise((resolve, reject) => {
-                            const change = new ldap.Change({ operation: 'add', modification: { type: key, values: [String(value)] } });
+                            const change = new ldap.Change({ operation: 'add', modification: { type: key, values: Array.isArray(value) ? value : [String(value)] } });
                             client.modify(userDN, change, (err) => err ? reject(err) : resolve());
                         });
                     } catch (addErr) { console.error(`LDAP Add Error for ${key}:`, addErr); }
@@ -497,21 +450,14 @@ exports.editUser = async (req, res) => {
         return successResponse(res, { uid }, actionMsg);
 
     } catch (err) {
-        console.error("🔥 Operation Error:", err);
-        
-        // 🚨 CATCH THE ACL BLOCK
-        if (err.code === 50) {
-            return res.status(403).json({ message: "Database Security Blocked this Action: Insufficient Access Rights." });
-        }
-        
-        return res.status(500).json({ message: "Server Error" });
+        console.error("Edit Error:", err);
+        return res.status(500).json({ message: "Update failed" });
     } finally {
         try { client.unbind(); } catch (e) { }
     }
 };
 
 exports.bulkImport = async (req, res) => {
-    // 1. Get the parsed users and selected department from the React Frontend
     const { users, department } = req.body;
 
     if (!users || users.length === 0) return res.status(400).json({ message: "No valid users found in request." });
@@ -519,18 +465,16 @@ exports.bulkImport = async (req, res) => {
 
     const client = createClient();
     try {
-        await bindAsUser(client, req);
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
         const summary = { success: 0, failed: 0, errors: [] };
 
-        // 2. Fetch all existing users to check for duplicates inside the same OU
         const existingUsers = await search(client, getOrgBase(), {
             scope: "sub",
             filter: "(objectClass=inetOrgPerson)",
             attributes: ["uid", "mail", "mobile", "cn", "description", "dn"]
         });
 
-        // Group existing users by their OU (Department)
         const usersByOu = {};
         let currentSequenceNumber = existingUsers.length + 1;
         existingUsers.forEach(u => {
@@ -542,30 +486,21 @@ exports.bulkImport = async (req, res) => {
                 email: String(Array.isArray(u.mail) ? u.mail[0] : u.mail || "").trim().toLowerCase(),
                 mobile: String(Array.isArray(u.mobile) ? u.mobile[0] : u.mobile || "").trim(),
                 cn: String(Array.isArray(u.cn) ? u.cn[0] : u.cn || "").trim().toLowerCase(),
-                secondaryEmail: String(Array.isArray(u.description) ? u.description[0] : u.description || "").trim().toLowerCase()
+                // 🚨 Apply parser mapping here!
+                secondaryEmail: parseSecondaryEmail(u.description).toLowerCase()
             });
         });
 
         const ouKey = department.toLowerCase();
         if (!usersByOu[ouKey]) usersByOu[ouKey] = [];
         
-        // Track rows processed in THIS batch to prevent duplicate rows from passing
         const batchProcessedByOu = { [ouKey]: [] };
 
-        // 🚨 HELPER 1: Generate Sequential + Random UID (e.g. USR543001, USR543002)
-        const generateSequenceUid = (index) => {
-            const randomPart = Math.floor(100 + Math.random() * 900); // 3 random digits
-            const sequenceNum = index.toString().padStart(3, '0'); // 001, 002, 003...
-            return `USR${randomPart}${sequenceNum}`;
-        };
-
-        // 🚨 HELPER 2: Generate Random 12-char Password
         const generateRandomPass = () => {
             const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
             return Array.from({length: 12}, () => chars[Math.floor(Math.random() * chars.length)]).join('');
         };
 
-        // 3. Process each user from the frontend array
         for (let i = 0; i < users.length; i++) {
             const user = users[i];
             const rowNum = i + 1; 
@@ -577,7 +512,6 @@ exports.bulkImport = async (req, res) => {
             const secondaryEmail = user.secondaryEmail ? String(user.secondaryEmail).trim() : "";
             const cn = `${fName} ${lName}`.trim();
 
-            // 🚨 VALIDATIONS FIRST (Before generating UID)
             if (!fName || !email) {
                 summary.failed++; summary.errors.push(`User ${rowNum}: Missing First Name or Email.`); continue;
             }
@@ -611,17 +545,23 @@ exports.bulkImport = async (req, res) => {
             if (isDuplicate('email', email)) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Email exists.`); continue; }
             if (isDuplicate('cn', cn)) { summary.failed++; summary.errors.push(`User ${rowNum} (${fName}): Name exists.`); continue; }
 
-            // 🚨 ALL CHECKS PASSED! NOW WE ASSIGN THE UID
             const randomPart = Math.floor(100 + Math.random() * 900);
             const seqString = currentSequenceNumber.toString().padStart(3, '0');
             const uid = `USR${randomPart}${seqString}`;
-            const password = generateRandomPass(); // Your existing random pass generator
+            const password = generateRandomPass(); 
 
             batchProcessedByOu[ouKey].push({ uid, email, mobile: cleanMobile, cn, secondaryEmail });
 
+            // 🚨 BUILD DESCRIPTION AS AN ARRAY FOR MULTI-VALUED LDAP ATTRIBUTE
+            const descArray = [`${department} Department`];
+            if (secondaryEmail) {
+                descArray.push(`secondaryMail.${secondaryEmail}`);
+            }
+
             const dn = `uid=${uid},ou=${department},${getOrgBase()}`;
             const entry = {
-                cn, sn: lName || fName, uid: uid, mail: email || undefined, mobile: cleanMobile, description: secondaryEmail || undefined,
+                cn, sn: lName || fName, uid: uid, mail: email || undefined, mobile: cleanMobile, 
+                description: descArray, // 🚨 Pass the array directly!
                 businessCategory: "USER", employeeType: "ACTIVE", userPassword: generateSSHA(password), objectClass: ["inetOrgPerson", "top"]
             };
 
@@ -636,7 +576,6 @@ exports.bulkImport = async (req, res) => {
                     client.add(dn, cleanEntry(entry), (err) => err ? reject(err) : resolve());
                 });
 
-                // 🚨 SUCCESS! Only increment sequence number if the user is actually saved
                 currentSequenceNumber++; 
                 summary.success++;
             } catch (err) {
@@ -663,9 +602,8 @@ exports.exportUsers = async (req, res) => {
 
     const client = createClient();
     try {
-       await bindAsUser(client, req);
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
 
-        // 🚨 UPDATE: Added "description" (secondary email) to attributes to fetch
         const users = await search(client, getOrgBase(), {
             scope: "sub", filter: "(objectClass=inetOrgPerson)",
             attributes: ["uid", "cn", "sn", "mail", "mobile", "businessCategory", "description", "createTimestamp"]
@@ -673,11 +611,9 @@ exports.exportUsers = async (req, res) => {
 
         let data = users.map(u => {
             const ouMatch = u.dn ? u.dn.match(/ou=([^,]+)/i) : null;
-
             const rawCn = Array.isArray(u.cn) ? u.cn[0] : (u.cn || "");
             const rawSn = Array.isArray(u.sn) ? u.sn[0] : (u.sn || "");
 
-            // Cleanly split first and last name
             let fName = rawCn;
             let lName = rawSn;
 
@@ -688,26 +624,23 @@ exports.exportUsers = async (req, res) => {
                 lName = "";
             }
 
-            // 🚨 EXACT MATCH TO YOUR IMPORT TEMPLATE HEADERS
             return {
                 "uid": Array.isArray(u.uid) ? u.uid[0] : u.uid,
                 "firstname": fName,
                 "lastname": lName,
                 "email": Array.isArray(u.mail) ? u.mail[0] : (u.mail || ""),
                 "department": ouMatch ? ouMatch[1] : 'General',
-                "password": "", // Blank for security, ready for template reuse
+                "password": "", 
                 "role": Array.isArray(u.businessCategory) ? u.businessCategory[0] : (u.businessCategory || "USER"),
-                "secondary email": Array.isArray(u.description) ? u.description[0] : (u.description || ""),
+                // 🚨 Apply parser to pull out just the email for the Excel export
+                "secondary email": parseSecondaryEmail(u.description),
                 "Mobile": Array.isArray(u.mobile) ? u.mobile[0] : (u.mobile || "")
             };
         });
 
-        // Filter the export list for Admins so they only see their allowed OUs
         if (req.user.role !== "SUPER_ADMIN" && req.user.role !== "super_admin") {
             data = data.filter(u => isAllowedOU(req.user.allowedOUs, u.department));
         }
-
-        // 🚨 REMOVED: We no longer strip the "department" field out, so it stays in the Excel file!
 
         const wb = xlsx.utils.book_new();
         const ws = xlsx.utils.json_to_sheet(data);
@@ -748,7 +681,6 @@ exports.getOUs = async (req, res) => {
 };
 
 exports.getDepartmentsStats = async (req, res) => {
-    // 🚨 1. ALLOW ADMINS: Updated security lock to allow standard Admins through
     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
         return res.status(403).json({ message: "Unauthorized" });
     }
@@ -757,17 +689,14 @@ exports.getDepartmentsStats = async (req, res) => {
     try {
        await bindAsUser(client, req);
 
-        // Fetch all OUs
         const entries = await search(client, getOrgBase(), { scope: "one", filter: "(objectClass=organizationalUnit)", attributes: ["ou"] });
         let depts = entries.map(e => Array.isArray(e.ou) ? e.ou[0] : e.ou)
             .filter(name => name && !['users', 'admins', 'system'].includes(name.toLowerCase()));
 
-        // 🚨 2. RBAC FILTER: If they are a standard Admin, ONLY calculate stats for their assigned departments
         if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN") {
             depts = depts.filter(dept => isAllowedOU(req.user.allowedOUs, dept));
         }
 
-        // Calculate active/inactive users per department
         const stats = [];
         for (const dept of depts) {
             const users = await search(client, `ou=${dept},${getOrgBase()}`, {
@@ -792,16 +721,13 @@ exports.getDepartmentsStats = async (req, res) => {
 };
 
 exports.createDepartment = async (req, res) => {
-    // 🚨 FIX: Allow admins to create OUs
     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
         return res.status(403).json({ message: "Unauthorized. Only Admins can add departments." });
     }
 
-    // 🚨 SMART CATCH: Grab the name no matter what the frontend called it
     const ouName = req.body.ouName || req.body.name || req.body.department;
 
     if (!ouName) {
-        console.error("🚨 Create Dept failed: Missing Name! Received Body:", req.body);
         return res.status(400).json({ message: "Department Name is required" });
     }
 
@@ -821,8 +747,6 @@ exports.createDepartment = async (req, res) => {
         return successResponse(res, null, "Department created successfully");
 
     } catch (err) {
-        console.error("🚨 LDAP Create OU Error:", err);
-        // 🚨 CLEARER ERROR: Tells you exactly if it's a duplicate
         if (err.code === 68) return res.status(400).json({ message: `Department '${cleanName}' already exists!` });
         return res.status(500).json({ message: "Failed to create department: " + err.message });
     } finally {
@@ -831,7 +755,6 @@ exports.createDepartment = async (req, res) => {
 };
 
 exports.editDepartment = async (req, res) => {
-    // 1. Security Check: Only Admins/Super Admins
     if (req.user.role !== "super_admin" && req.user.role !== "SUPER_ADMIN" && req.user.role !== "admin" && req.user.role !== "ADMIN") {
         return res.status(403).json({ message: "Unauthorized. Only Admins can rename departments." });
     }
@@ -853,12 +776,10 @@ exports.editDepartment = async (req, res) => {
     try {
         await bindAsUser(client, req);
 
-        // In LDAP, renaming a folder means modifying its "Distinguished Name" (DN)
         const oldDN = `ou=${cleanOldName},${getOrgBase()}`;
-        const newRDN = `ou=${cleanNewName}`; // RDN = Relative Distinguished Name
+        const newRDN = `ou=${cleanNewName}`; 
 
         await new Promise((resolve, reject) => {
-            // client.modifyDN is the specific LDAP command for renaming
             client.modifyDN(oldDN, newRDN, (err) => err ? reject(err) : resolve());
         });
 
@@ -867,8 +788,6 @@ exports.editDepartment = async (req, res) => {
         return successResponse(res, null, "Department renamed successfully");
 
     } catch (err) {
-        console.error("🚨 LDAP Rename OU Error:", err);
-        
         if (err.code === 68) return res.status(400).json({ message: `Department '${cleanNewName}' already exists!` });
         if (err.code === 32) return res.status(404).json({ message: `Department '${cleanOldName}' not found!` });
         if (err.code === 66) return res.status(400).json({ message: "Cannot rename a department that contains users. Please move the users first." });
@@ -896,14 +815,12 @@ exports.bulkActivate = async (req, res) => {
 };
 
 exports.deleteUser = async (req, res) => {
-    // 🚨 HARD STOP: Enforce "No Deletion" Policy
     return res.status(403).json({ 
         message: "Action Forbidden: Permanent deletion of users is disabled for security and audit purposes. Please suspend (deactivate) the user instead." 
     });
 };
 
 exports.deleteDepartment = async (req, res) => {
-    // 🚨 HARD STOP: Enforce "No Deletion" Policy
     return res.status(403).json({ 
         message: "Action Forbidden: Permanent deletion of departments is disabled. Please rename or archive the department instead." 
     });

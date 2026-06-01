@@ -1191,54 +1191,69 @@ export default function Admin() {
                     </div>
 
                     {/* Data Verification Table */}
-                    <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-xl">
-                        <table className="w-full text-left text-sm">
-                            <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 z-10 shadow-sm border-b border-gray-200 dark:border-gray-700">
-                                <tr>
-                                    <th className="p-3 w-12 text-center">
-                                        <input 
-                                            type="checkbox" 
-                                            checked={importPreviewData.length > 0 && importPreviewData.every(r => r.selected)}
-                                            onChange={(e) => {
-                                                const checked = e.target.checked;
-                                                setImportPreviewData(prev => prev.map(r => ({...r, selected: checked})));
-                                            }}
-                                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                                        />
-                                    </th>
-                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">First Name</th>
-                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Last Name</th>
-                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Email</th>
-                                    <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Mobile</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
-                                {importPreviewData.map((row) => (
-                                    <tr key={row._id} className={row.selected ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900/50 opacity-50'}>
-                                        <td className="p-3 text-center">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={row.selected}
-                                                onChange={(e) => {
-                                                    const checked = e.target.checked;
-                                                    setImportPreviewData(prev => prev.map(r => r._id === row._id ? {...r, selected: checked} : r));
-                                                }}
-                                                className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                                            />
-                                        </td>
-                                        <td className={`p-3 font-medium ${!row.firstName ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
-                                            {row.firstName || "MISSING"}
-                                        </td>
-                                        <td className="p-3 text-gray-800 dark:text-gray-200">{row.lastName}</td>
-                                        <td className={`p-3 ${!row.email ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
-                                            {row.email || "MISSING"}
-                                        </td>
-                                        <td className="p-3 text-gray-800 dark:text-gray-200">{row.mobile}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    {/* Data Verification Table */}
+<div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-xl">
+    <table className="w-full text-left text-sm">
+        <thead className="bg-gray-50 dark:bg-gray-900 sticky top-0 z-10 shadow-sm border-b border-gray-200 dark:border-gray-700">
+            <tr>
+                <th className="p-3 w-12 text-center">
+                    <input 
+                        type="checkbox" 
+                        checked={importPreviewData.length > 0 && importPreviewData.every(r => r.selected)}
+                        onChange={(e) => {
+                            const checked = e.target.checked;
+                            setImportPreviewData(prev => prev.map(r => ({...r, selected: checked})));
+                        }}
+                        className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                </th>
+                <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">First Name</th>
+                <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Email</th>
+                <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">Mobile</th>
+         
+                {/* 🚨 DYNAMIC MULTI-VALUE DESCRIPTION RENDER */}
+ <th className="p-3 font-semibold text-gray-600 dark:text-gray-300">LDAP Description (Preview)</th>
+            </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {importPreviewData.map((row) => (
+                <tr key={row._id} className={row.selected ? 'bg-white dark:bg-gray-800' : 'bg-gray-50 dark:bg-gray-900/50 opacity-50'}>
+                    <td className="p-3 text-center">
+                        <input 
+                            type="checkbox" 
+                            checked={row.selected}
+                            onChange={(e) => {
+                                const checked = e.target.checked;
+                                setImportPreviewData(prev => prev.map(r => r._id === row._id ? {...r, selected: checked} : r));
+                            }}
+                            className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                    </td>
+                    <td className={`p-3 font-medium ${!row.firstName ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
+                        {row.firstName || "MISSING"} {row.lastName}
+                    </td>
+                    <td className={`p-3 ${!row.email ? 'text-red-500 font-bold' : 'text-gray-800 dark:text-gray-200'}`}>
+                        {row.email || "MISSING"}
+                    </td>
+                    <td className="p-3 text-gray-800 dark:text-gray-200">{row.mobile}</td>
+                    
+                   {/* 🚨 DYNAMIC DESIGNATION RENDER (Department Only) */}
+                    <td className="p-3 text-gray-800 dark:text-gray-200">
+                        <div className="flex flex-col gap-1.5">
+                            {importDepartment ? (
+                                <span className="bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 px-2 py-1 rounded text-xs font-bold border border-indigo-100 dark:border-indigo-800 w-max shadow-sm">
+                                    {importDepartment.charAt(0).toUpperCase() + importDepartment.slice(1)} Department
+                                </span>
+                            ) : (
+                                <span className="text-gray-400 dark:text-gray-500 italic text-xs">Select Dept Above...</span>
+                            )}
+                        </div>
+                    </td>
+                </tr>
+            ))}
+        </tbody>
+    </table>
+</div>
 
                     <div className="flex justify-end gap-3 pt-2">
                         <button 

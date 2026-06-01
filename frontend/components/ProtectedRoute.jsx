@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../src/context/AuthContext';
+import { useAuth } from '../src/context/AuthContext'; // Adjust path if necessary
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
     // 1. Pull global auth state from Context
@@ -96,11 +96,8 @@ const ProtectedRoute = ({ children, allowedRoles }) => {
 
     // 4. Role Authorization Fail: Block access if their role isn't in the allowedRoles array
     if (allowedRoles && !allowedRoles.includes(auth.role)) {
-        return (
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
-                <h2 style={{ color: "red" }}>Unauthorized Access</h2>
-            </div>
-        );
+        // 🚨 Intercept and send them to the new Unauthorized page
+        return <Navigate to="/unauthorized" replace />;
     }
 
     // 5. SUCCESS: Render the protected page!
