@@ -159,7 +159,7 @@ export default function UserFormDialog({ visible, onHide, editMode, formData, se
                     </div>
                 </div>
 
-                {/* Password */}
+               {/* Password */}
                 <div>
                     <label className={labelClasses}>Password</label>
                     <input 

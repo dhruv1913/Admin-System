@@ -276,7 +276,7 @@ export default function Admin() {
                 mobile: String(Array.isArray(u.mobile) ? u.mobile[0] : u.mobile || ""),
                 department: u.department || "General",
                 createTimestamp: u.createTimestamp || "00000000000000Z",
-                secondaryEmail: String(Array.isArray(u.description) ? u.description[0] : (u.description || "")),
+                secondaryEmail: u.secondaryEmail || "",
                 labeledURI: String(Array.isArray(u.labeledURI) ? u.labeledURI[0] : (u.labeledURI || "")),
             }));
 

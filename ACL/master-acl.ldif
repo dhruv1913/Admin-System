@@ -19,3 +19,5 @@ olcAccess: {3}to dn.regex="^uid=[^,]+,ou=([^,]+),dc=adminsystem,dc=com$"
   by * read
 olcAccess: {4}to *
   by * read
+
+

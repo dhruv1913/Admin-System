@@ -15,48 +15,59 @@ const { isRealImage, saveSecureImage } = require('../utils/fileValidator');
 const getOrgBase = () => ldapConfig.baseDN || process.env.LDAP_ORG_BASE;
 
 const bindAsUser = async (client, req) => {
-    // 1. 👑 SUPER ADMIN BYPASS: Prevent the system owner from getting locked out
-    // Super Admins bypass ACLs anyway, so we use the Root Bind to prevent password sync issues.
+    // 1. 👑 SUPER ADMIN BYPASS
     if (req.user && (req.user.role === "SUPER_ADMIN" || req.user.role === "super_admin")) {
         console.log(`[👑 SUPER ADMIN BIND] Connecting as Root Admin for ${req.user.uid}`);
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
         return;
     }
 
-    // 2. 🔐 STANDARD ADMINS: Strict Dynamic ACL Enforcement
+    // 2. 🔐 STANDARD ADMINS (With Auto-Heal)
     if (req.user && req.user.uid) {
         try {
-            // Step A: Grab their personal decrypted password from PostgreSQL
-            const userPassword = await dbService.getStoredPassword(req.user.uid);
+            let userPassword = await dbService.getStoredPassword(req.user.uid);
             
-            if (userPassword) {
-                // Step B: Briefly bind as Root ONLY to search for the user's exact DN path
-                await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
-                const searchResult = await search(client, process.env.LDAP_ORG_BASE || process.env.LDAP_BASE_DN, {
-                    scope: 'sub',
-                    filter: `(uid=${req.user.uid})`,
-                    attributes: ['dn']
-                });
-
-                if (searchResult.length > 0) {
-                    const userDN = searchResult[0].dn;
-                    
-                    // 🚨 Step C: RE-BIND AS THE ACTUAL USER
-                    // This strips away "God Mode" and forces OpenLDAP to apply the Regex ACLs!
-                    console.log(`[🔐 STRICT ACL BIND] Switching LDAP connection to: ${userDN}`);
-                    await bind(client, userDN, userPassword);
-                    return; 
+            // 🚨 AUTO-HEAL: If decryption fails, grab the raw plain-text from PostgreSQL and encrypt it properly!
+            if (!userPassword) {
+                console.log(`[🔍 SMART CHECK] Attempting to auto-heal corrupted password for ${req.user.uid}...`);
+                const dbCheck = await pool.query("SELECT password FROM user_mappings WHERE uid = $1", [req.user.uid]);
+                
+                if (dbCheck.rows.length > 0 && dbCheck.rows[0].password) {
+                    const rawPassword = dbCheck.rows[0].password;
+                    // If it's not AES encrypted, treat it as plain text and fix it
+                    if (!rawPassword.startsWith("U2FsdGVkX1")) {
+                        userPassword = rawPassword;
+                        await dbService.updateUserPassword(req.user.uid, rawPassword);
+                        console.log(`[✅ AUTO-HEAL SUCCESS] Permanently fixed encryption for ${req.user.uid}`);
+                    }
                 }
             }
+
+            if (!userPassword) throw new Error("MISSING_DB_PASSWORD"); 
+
+            await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+            const searchResult = await search(client, getOrgBase(), {
+                scope: 'sub', filter: `(uid=${req.user.uid})`, attributes: ['dn']
+            });
+
+            if (searchResult.length > 0) {
+                const userDN = searchResult[0].dn;
+                await bind(client, userDN, userPassword);
+                return; 
+            }
+            throw new Error("User not found in LDAP directory.");
         } catch (err) {
-            console.error(`[🚨 BIND FAILED] Could not dynamically bind as ${req.user.uid}:`, err.message);
-            throw new Error("LDAP Security Check Failed: Unable to verify your directory credentials.");
+            console.error(`[🚨 BIND FAILED] Error for ${req.user.uid}:`, err.message);
+            throw err; 
         }
     }
     
-    // 3. Fallback (Only used if the system itself is booting up or making an automated request)
-    console.log(`[⚠️ FALLBACK BIND] Connecting as Root Admin`);
-    await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+    // 3. Fallback
+    if (!req.user) {
+        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+    } else {
+        throw new Error("Unauthorized LDAP Bind Attempt.");
+    }
 };
 
 // 🚨 NEW HELPER: Scans the array for the specific "secondaryMail." tag
@@ -286,6 +297,8 @@ exports.addUser = async (req, res) => {
             descArray.push(`secondaryMail.${secondaryEmail}`);
         }
 
+        const isMeSuperAdmin = req.user.role === "super_admin" || req.user.role === "SUPER_ADMIN";
+
         const entry = cleanEntry({
             objectClass: ["top", "person", "organizationalPerson", "inetOrgPerson"],
             cn: cn, 
@@ -293,15 +306,17 @@ exports.addUser = async (req, res) => {
             uid: uid,
             userPassword: ldapPassword, 
             employeeType: "active",
-            businessCategory: role || "USER", 
+            
+            // 🚨 THE LOCK: Standard Admins can ONLY create standard "USER"s
+            businessCategory: isMeSuperAdmin ? (role || "USER") : "USER", 
+            departmentNumber: isMeSuperAdmin ? formattedPermissions : undefined,
+            
             mail: email, 
-            description: descArray, // 🚨 Pass the array directly!
+            description: descArray, 
             mobile: mobile, 
             title: title || "Employee",
-            departmentNumber: formattedPermissions,
             labeledURI: `uploads/${uid}.jpg`
         });
-
         await new Promise((resolve, reject) => {
             client.add(newUserDN, entry, (err) => err ? reject(err) : resolve());
         });
@@ -337,7 +352,8 @@ exports.editUser = async (req, res) => {
             saveSecureImage(req.file.buffer, uid);
         }
 
-        await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
+        // 🚨 Force the backend to respect ACLs based on who is logged in!
+await bindAsUser(client, req);
 
         const users = await search(client, getOrgBase(), { scope: "sub", filter: `(uid=${uid})`, attributes: ["dn"] });
         if (users.length === 0) return res.status(404).json({ message: "User not found" });
@@ -418,12 +434,20 @@ exports.editUser = async (req, res) => {
             descArray.push(`secondaryMail.${secondaryEmail}`);
         }
 
+        // 🚨 SECURITY CHECK: Is the person making this request a Super Admin?
+        // 🚨 STRICT BACKEND LOCK: Check if requester is Super Admin
+        const isMeSuperAdmin = req.user.role === "super_admin" || req.user.role === "SUPER_ADMIN";
+
         const changes = cleanEntry({
             cn: (firstName && lastName) ? `${firstName} ${lastName}` : undefined,
             sn: lastName, mail: email, 
-            description: descArray, // 🚨 Pass the array directly!
+            description: descArray, 
             title: title, mobile: mobile, employeeType: employeeType,
-            businessCategory: role, departmentNumber: permissions,
+            
+            // 🚨 THE LOCK: If not a Super Admin, force these to undefined so they are stripped out and ignored!
+            businessCategory: isMeSuperAdmin ? role : undefined, 
+            departmentNumber: isMeSuperAdmin ? permissions : undefined,
+            
             labeledURI: req.file ? `uploads/${uid}.jpg` : undefined
         });
 
