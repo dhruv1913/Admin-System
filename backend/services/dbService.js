@@ -85,7 +85,7 @@ exports.deleteUserMapping = async (uid) => {
 // ✅ FIXED: Fetch a stored password (used by authController)
 exports.getStoredPassword = async (uid) => {
     const result = await sequelize.query(
-        "SELECT ldap_pwd FROM ldap_user_mapping WHERE ldap_uid = :uid AND is_active = TRUE",
+        "SELECT ldap_pwd FROM ldap_user_mapping WHERE ldap_uid = :uid",
         {
             replacements: { uid: uid },
             type: sequelize.QueryTypes.SELECT

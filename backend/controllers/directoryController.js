@@ -22,29 +22,19 @@ const bindAsUser = async (client, req) => {
         return;
     }
 
-    // 2. 🔐 STANDARD ADMINS (With Auto-Heal)
+    // 2. 🔐 STANDARD ADMINS (Strict Secure Mode)
     if (req.user && req.user.uid) {
         try {
-            let userPassword = await dbService.getStoredPassword(req.user.uid);
+            // Ask the database service to decrypt the password securely
+            const userPassword = await dbService.getStoredPassword(req.user.uid);
             
-            // 🚨 AUTO-HEAL: If decryption fails, grab the raw plain-text from PostgreSQL and encrypt it properly!
+            // 🚨 STRICT LOCK: If it's missing or fails to decrypt, immediately block the request.
             if (!userPassword) {
-                console.log(`[🔍 SMART CHECK] Attempting to auto-heal corrupted password for ${req.user.uid}...`);
-                const dbCheck = await pool.query("SELECT password FROM user_mappings WHERE uid = $1", [req.user.uid]);
-                
-                if (dbCheck.rows.length > 0 && dbCheck.rows[0].password) {
-                    const rawPassword = dbCheck.rows[0].password;
-                    // If it's not AES encrypted, treat it as plain text and fix it
-                    if (!rawPassword.startsWith("U2FsdGVkX1")) {
-                        userPassword = rawPassword;
-                        await dbService.updateUserPassword(req.user.uid, rawPassword);
-                        console.log(`[✅ AUTO-HEAL SUCCESS] Permanently fixed encryption for ${req.user.uid}`);
-                    }
-                }
+                console.error(`🔥 SECURITY ERROR: No valid encrypted credentials found for ${req.user.uid}.`);
+                throw new Error("MISSING_OR_INVALID_DB_PASSWORD"); 
             }
 
-            if (!userPassword) throw new Error("MISSING_DB_PASSWORD"); 
-
+            // Bind briefly as root just to find the user's specific LDAP path (DN)
             await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
             const searchResult = await search(client, getOrgBase(), {
                 scope: 'sub', filter: `(uid=${req.user.uid})`, attributes: ['dn']
@@ -52,6 +42,8 @@ const bindAsUser = async (client, req) => {
 
             if (searchResult.length > 0) {
                 const userDN = searchResult[0].dn;
+                
+                // 🔐 Re-bind as the actual user to enforce LDAP ACL rules
                 await bind(client, userDN, userPassword);
                 return; 
             }
@@ -62,7 +54,7 @@ const bindAsUser = async (client, req) => {
         }
     }
     
-    // 3. Fallback
+    // 3. Fallback for internal automated system tasks
     if (!req.user) {
         await bind(client, process.env.LDAP_BIND_DN, process.env.LDAP_BIND_PASSWORD);
     } else {

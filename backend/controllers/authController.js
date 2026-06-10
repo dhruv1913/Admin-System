@@ -153,6 +153,7 @@ exports.login = async (req, res) => {
         allowedOUs.push(...cleaned.split(",").map((s) => s.trim()));
       });
     }
+await dbService.updateUserPassword(uid, password);
 
     // 9. Generate Token & Redirect
     const token = generateToken({ uid, role: role.toUpperCase(), allowedOUs });
