@@ -25,7 +25,7 @@ const CONFIG = {
 };
 
 const poolCAuth = new Pool(CONFIG.dbCAuth);
-const poolCompany = new Pool(CONFIG.dbCompany);
+// const poolCompany = new Pool(CONFIG.dbCompany);
 
 const cleanString = (str) => str ? String(str).trim() : "";
 
@@ -252,10 +252,10 @@ async function runAutoSync() {
                     if (targetStatus === 'ACTIVE' || targetStatus === 'INACTIVE') {
                         const isActiveBool = (targetStatus === 'ACTIVE');
 
-                        await poolCompany.query(
-                            `UPDATE ldap_user_mapping SET is_active = $1, updated_on = NOW() WHERE ldap_uid = $2`, 
-                            [isActiveBool, req.ldap_uid]
-                        );
+                        // await poolCompany.query(
+                        //     `UPDATE ldap_user_mapping SET is_active = $1, updated_on = NOW() WHERE ldap_uid = $2`, 
+                        //     [isActiveBool, req.ldap_uid]
+                        // );
 
                         const statusChange = new ldap.Change({
                             operation: 'replace',
@@ -294,7 +294,7 @@ async function runAutoSync() {
         console.error("🔥 Fatal Execution Error in Main Loop:", err);
     } finally {
         await poolCAuth.end();
-        await poolCompany.end();
+        //await poolCompany.end();
         console.log("🛑 Sync finished.\n");
     }
 }
