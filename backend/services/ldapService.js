@@ -1,134 +1,226 @@
-const ldap = require("ldapjs");
-const ldapConfig = require("../config/ldap");
+require('dotenv').config(); 
+const crypto = require('crypto'); // 👈 1. Added built-in crypto module
 
-// 1. Accept the dynamic database URL
-exports.createClient = (dynamicUrl) => {
-  const finalUrl = dynamicUrl || ldapConfig.url ;
-  const client = ldap.createClient({ url: finalUrl });
+const { Pool } = require('pg');
+const ldap = require('ldapjs');
 
-  // Catch connection errors so the server doesn't crash!
-  client.on("error", (err) => {
-    console.error("⚠️ LDAP Client Error Caught:", err.message);
-  });
-
-  return client;
-};
-
-// 2. Bind to the LDAP server
-exports.bind = (client, dn, password) => {
-  return new Promise((resolve, reject) => {
-    client.bind(dn, password, (err) => {
-      if (err) reject(err);
-      else resolve();
-    });
-  });
-};
-
-// 3. Perform an LDAP search
-exports.search = (client, base, options) => {
-  return new Promise((resolve, reject) => {
-    client.search(base, options, (err, res) => {
-      if (err) return reject(err);
-      const entries = [];
-      res.on("searchEntry", (entry) => {
-        const obj = { dn: entry.dn.toString() };
-        entry.attributes.forEach((attr) => {
-          obj[attr.type] = attr.values;
-        });
-        entries.push(obj);
-      });
-      res.on("error", (err) => reject(err));
-      res.on("end", () => resolve(entries));
-    });
-  });
-};
-
-
-// 4. THE FIX: The missing function that connects your DB to LDAP
-exports.checkUserExists = async (username, settings = {}) => {
-  // 🚨 SMART FALLBACKS: Handle both DB snake_case and Config camelCase
-  const ldapUrl = settings.ldap_url || settings.url || ldapConfig.url;
-  const bindDN = settings.bind_dn || settings.bindDN || ldapConfig.bindDN;
-  const bindPass = settings.password || settings.bindPassword || ldapConfig.bindPassword;
-  const baseDN = settings.base_dn || settings.baseDN || ldapConfig.baseDN;
-
-  const client = exports.createClient(ldapUrl);
-
-  try {
-    // Now it will correctly find uid=admin,ou=system and your password!
-    await exports.bind(client, bindDN, bindPass);
-
-    // 🚨 ADDED businessCategory and departmentNumber to attributes
-    const searchOptions = {
-      scope: "sub",
-      filter: `(|(uid=${username})(mail=${username})(mobile=${username}))`,
-      attributes: [
-        "uid", "mobile", "givenName", "sn", "cn", "mail", "title", "jpegPhoto",
-        "businessCategory", "departmentNumber" 
-      ],
-    };
-
-    const entries = await exports.search(client, baseDN, searchOptions);
-
-    if (entries.length === 0) {
-      return { userExists: false };
+// ----------------------------------------------------------------------------
+// 1. DATABASE CONFIGURATION 
+// ----------------------------------------------------------------------------
+const CONFIG = {
+    dbCAuth: {
+        user: 'postgres',
+        host: 'localhost',
+        database: 'cAuth',     
+        password: '1234',
+        port: 5432,
+    },
+    dbCompany: {
+        user: 'postgres',
+        host: 'localhost',
+        database: 'Company',   
+        password: '1234',
+        port: 5432,
     }
+};
 
-    const user = entries[0];
-    const getVal = (attr) => (Array.isArray(attr) ? attr[0] : attr || "");
+const poolCAuth = new Pool(CONFIG.dbCAuth);
+const poolCompany = new Pool(CONFIG.dbCompany);
 
-    // 🚨 Clean up the permissions array so the dashboard can read it
-    let allowedOUs = [];
-    if (user.departmentNumber) {
-        allowedOUs = Array.isArray(user.departmentNumber) ? user.departmentNumber : [user.departmentNumber];
-        // Strip the "ALLOW:" tag so the frontend gets clean department names
-        allowedOUs = allowedOUs.map(ou => ou.replace('ALLOW:', '').trim());
+const cleanString = (str) => str ? String(str).trim() : "";
+
+// 👈 2. Added a secure password generator function
+function generateSecurePassword(length = 12) {
+    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
+    let password = "";
+    for (let i = 0, n = charset.length; i < length; ++i) {
+        password += charset.charAt(crypto.randomInt(0, n));
     }
+    return password;
+}
 
-    const userRole = getVal(user.businessCategory) || "USER";
+// ----------------------------------------------------------------------------
+// 2. MAIN AUTOMATION LOGIC
+// ----------------------------------------------------------------------------
+async function runAutoSync() {
+    console.log(`\n⏳ [${new Date().toLocaleTimeString()}] Starting Sync Process...`);
+    
+    try {
+        const res = await poolCAuth.query(`
+            SELECT 
+                r.*, 
+                s.ldap_url, 
+                s.base_dn, 
+                s.bind_dn, 
+                s.password AS ldap_password,
+                s.ou AS ldap_ou
+            FROM admin_add_user_requests r
+            LEFT JOIN service_ldap_settings s ON r.service_id = s.service_id
+            WHERE r.cron_status = false 
+            AND r.is_deleted = false 
+            ORDER BY r.created_on ASC
+        `);
+        
+        const requests = res.rows;
+        if (requests.length === 0) {
+            console.log("✅ No pending requests found.");
+            return;
+        }
 
-    return {
-      userExists: true,
-      userName: getVal(user.uid),
-      mobileNumber: getVal(user.mobile),
-      firstName: getVal(user.givenName),
-      lastName: getVal(user.sn),
-      fullName: getVal(user.cn),
-      email: getVal(user.mail),
-      title: getVal(user.title),
-      picture: user.jpegPhoto ? Buffer.from(getVal(user.jpegPhoto)).toString("base64") : null,
-      
-      // 🚨 Give the token exactly what it's looking for
-      role: userRole, 
-      businessCategory: userRole, 
-      allowedOUs: allowedOUs,
-      departmentNumber: allowedOUs,
-      canWrite: userRole === "SUPER_ADMIN" || userRole === "ADMIN" 
-    };
-  } catch (err) {
-    console.error("❌ LDAP checkUserExists Error:", err.message);
-    throw err; 
-  } finally {
-    client.unbind();
-  }
-};
-// Add a new LDAP entry
-exports.add = (client, dn, entry) => {
-  return new Promise((resolve, reject) => {
-    client.add(dn, entry, (err) => (err ? reject(err) : resolve()));
-  });
-};
+        console.log(`📥 Found ${requests.length} pending request(s). Processing...`);
 
-// Modify an existing LDAP entry
-exports.modify = (client, dn, changes) => {
-  return new Promise((resolve, reject) => {
-    client.modify(dn, changes, (err) => (err ? reject(err) : resolve()));
-  });
-};
+        for (const req of requests) {
+            console.log(`\n⚙️ Processing Request #${req.id} | Action: ${req.action} | UID: ${req.ldap_uid} | Service ID: ${req.service_id}`);
 
-// Delete an LDAP entry
-exports.del = (client, dn) => {
-  return new Promise((resolve, reject) => {
-    client.del(dn, (err) => (err ? reject(err) : resolve()));
-  });
-};
+            let requestStatus = 'PENDING';
+            let remarksMessage = '';
+            let ldapClient = null;
+
+            try {
+                if (!req.ldap_url || !req.base_dn) {
+                    throw new Error(`Missing LDAP configuration for Service ID ${req.service_id}`);
+                }
+
+                ldapClient = ldap.createClient({ url: req.ldap_url });
+                await new Promise((resolve, reject) => {
+                    ldapClient.bind(req.bind_dn, req.ldap_password, (err) => err ? reject(err) : resolve());
+                });
+
+                const fName = cleanString(req.first_name);
+                const mName = cleanString(req.middle_name);
+                const lName = cleanString(req.last_name);
+                const fullName = `${fName} ${mName} ${lName}`.replace(/\s+/g, ' ').trim();
+                
+                const existingDN = await new Promise((resolve, reject) => {
+                    ldapClient.search(req.base_dn, {
+                        filter: `(uid=${req.ldap_uid})`,
+                        scope: 'sub', 
+                        attributes: ['dn']
+                    }, (err, res) => {
+                        if (err) return reject(err);
+                        
+                        let foundDN = null;
+                        res.on('searchEntry', (entry) => { foundDN = entry.dn.toString(); });
+                        res.on('error', (err) => reject(err));
+                        res.on('end', () => resolve(foundDN));
+                    });
+                });
+
+                // ==========================================
+                // ACTION: ADD USER
+                // ==========================================
+                if (req.action === 'ADD') {
+                    if (existingDN) {
+                        throw new Error(`User ${req.ldap_uid} already exists in LDAP.`);
+                    }
+
+                    const targetOU = req.ldap_ou ? req.ldap_ou : 'ou=Users';
+                    const newUserDN = `uid=${req.ldap_uid},${targetOU},${req.base_dn}`;
+                    
+                    const tempPassword = generateSecurePassword(); // 👈 3. Generate the password
+
+                    const newUserEntry = {
+                        cn: fullName,
+                        sn: lName || fName || "Unknown",
+                        uid: req.ldap_uid,
+                        mail: cleanString(req.primary_email),
+                        mobile: cleanString(req.mobile_number),
+                        title: cleanString(req.designation),
+                        employeeType: req.user_status ? req.user_status.toUpperCase() : 'ACTIVE',
+                        userPassword: tempPassword, // 👈 4. Assign it to LDAP
+                        objectClass: ['top', 'person', 'organizationalPerson', 'inetOrgPerson']
+                    };
+
+                    await new Promise((resolve, reject) => {
+                        ldapClient.add(newUserDN, newUserEntry, (err) => err ? reject(err) : resolve());
+                    });
+                    
+                    console.log(`   ➕ User Successfully Added to LDAP: ${newUserDN}`);
+                    
+                    // 👈 5. Save the password to the database remarks so you don't lose it!
+                    remarksMessage = `Success. Temp Password: ${tempPassword}`; 
+                    requestStatus = 'APPROVED';
+                } 
+                // ==========================================
+                // ACTION: EDIT OR STATUS CHANGE
+                // ==========================================
+                else {
+                    if (!existingDN) {
+                        throw new Error(`User ${req.ldap_uid} does not exist anywhere in LDAP!`);
+                    }
+                    console.log(`   🔍 Found existing user at: ${existingDN}`);
+
+                    if (req.action === 'EDIT') {
+                        const changes = [];
+                        const addChange = (type, value) => {
+                            if (value) changes.push(new ldap.Change({ operation: 'replace', modification: { type, values: [value] } }));
+                        };
+
+                        addChange('cn', fullName);
+                        addChange('sn', lName || fName);
+                        addChange('mail', cleanString(req.primary_email));
+                        addChange('mobile', cleanString(req.mobile_number));
+                        addChange('title', cleanString(req.designation));
+
+                        if (changes.length > 0) {
+                            await new Promise((resolve, reject) => {
+                                ldapClient.modify(existingDN, changes, (err) => err ? reject(err) : resolve());
+                            });
+                            console.log(`   ✔️ Updated personal details`);
+                        }
+                    } 
+
+                    let targetStatus = req.user_status ? req.user_status.toUpperCase() : null;
+                    if (req.action === 'DEACTIVATED') targetStatus = 'INACTIVE'; 
+
+                    if (targetStatus === 'ACTIVE' || targetStatus === 'INACTIVE') {
+                        const isActiveBool = (targetStatus === 'ACTIVE');
+
+                        await poolCompany.query(
+                            `UPDATE ldap_user_mapping SET is_active = $1, updated_on = NOW() WHERE ldap_uid = $2`, 
+                            [isActiveBool, req.ldap_uid]
+                        );
+
+                        const statusChange = new ldap.Change({
+                            operation: 'replace',
+                            modification: { type: 'employeeType', values: [targetStatus] }
+                        });
+                        
+                        await new Promise((resolve, reject) => {
+                            ldapClient.modify(existingDN, statusChange, (err) => err ? reject(err) : resolve());
+                        });
+                        console.log(`   ✔️ Access status set to [${targetStatus}]`);
+                    }
+
+                    remarksMessage = 'Request processed successfully';
+                    requestStatus = 'APPROVED';
+                }
+
+            } catch (err) {
+                console.error(`   ❌ Failed: ${err.message}`);
+                remarksMessage = err.message;
+                requestStatus = 'REJECTED';
+            } finally {
+                if (ldapClient) {
+                    ldapClient.unbind((err) => { if(err) console.log("Unbind error ignored"); });
+                }
+
+                await poolCAuth.query(
+                    `UPDATE admin_add_user_requests 
+                     SET cron_status = true, request_status = $1, remarks = $2, updated_on = CURRENT_TIMESTAMP 
+                     WHERE id = $3`, 
+                    [requestStatus, remarksMessage, req.id]
+                );
+                console.log(`   ✅ DB Updated -> Status: [${requestStatus}] | Remarks: [${remarksMessage}]`);
+            }
+        }
+    } catch (err) {
+        console.error("🔥 Fatal Execution Error in Main Loop:", err);
+    } finally {
+        await poolCAuth.end();
+        await poolCompany.end();
+        console.log("🛑 Sync finished.\n");
+    }
+}
+
+runAutoSync();
